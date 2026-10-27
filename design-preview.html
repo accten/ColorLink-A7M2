@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ColorLink · 界面预览</title>
+<style>
+  :root{
+    --bg:#08090A; --bg-elev:#0C0E10; --surface:#111316; --surface-hi:#171A1E;
+    --hairline:rgba(255,255,255,.075); --hairline-strong:rgba(255,255,255,.16);
+    --text:#F4F2EE; --muted:#9AA0A6; --faint:#646A70;
+    --accent:#E8DFCF; --ink:#0A0B0C; --ok:#7FD1A6; --warn:#E0C07B; --danger:#E0868A;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:#050506;color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    -webkit-font-smoothing:antialiased}
+  body{padding:56px 28px 80px;background:
+    radial-gradient(900px 500px at 50% -10%,rgba(232,223,207,.05),transparent 70%),
+    radial-gradient(700px 400px at 90% 110%,rgba(227,178,124,.05),transparent 70%),#050506}
+  .head{max-width:1720px;margin:0 auto 40px;display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap}
+  .eyebrow{font-size:10.5px;letter-spacing:1.6px;text-transform:uppercase;color:var(--faint);font-weight:600}
+  h1{margin:8px 0 0;font-size:34px;letter-spacing:-1.1px;font-weight:600}
+  .sub{color:var(--muted);font-size:14px;margin-top:6px}
+  .note{font-family:var(--mono);font-size:11px;color:var(--faint);max-width:360px;line-height:1.6}
+
+  .row{max-width:1720px;margin:0 auto;display:flex;gap:34px;flex-wrap:wrap;justify-content:center}
+  .col{display:flex;flex-direction:column;gap:14px;align-items:center}
+  .caption{font-family:var(--mono);font-size:10.5px;letter-spacing:1.2px;color:var(--faint);text-transform:uppercase}
+  .caption b{color:var(--muted);font-weight:600}
+
+  .phone{width:390px;height:844px;border-radius:46px;background:var(--bg);position:relative;overflow:hidden;
+    border:1px solid rgba(255,255,255,.10);box-shadow:0 40px 80px -30px rgba(0,0,0,.9), inset 0 0 0 1px rgba(255,255,255,.02)}
+  .statusbar{height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 26px;
+    font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .statusbar .icons{display:flex;gap:6px;align-items:center}
+  .bar{width:16px;height:9px;border:1px solid var(--muted);border-radius:2px;position:relative;opacity:.8}
+  .bar:after{content:"";position:absolute;inset:1.5px;right:7px;background:var(--muted);border-radius:1px}
+
+  .content{padding:0 20px;height:calc(100% - 48px - 62px);overflow:hidden}
+  .label{font-size:10.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--faint);font-weight:600}
+  .display{font-size:34px;letter-spacing:-1.1px;line-height:1.1;font-weight:600;margin-top:8px}
+  .body{font-size:15px;line-height:1.4;letter-spacing:-.1px}
+  .muted{color:var(--muted);font-size:14px}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .mono-xs{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.2px}
+
+  .card{background:var(--surface);border:1px solid var(--hairline);border-radius:16px;padding:16px}
+  .hairline{height:1px;background:var(--hairline);margin:14px 0}
+  .row-between{display:flex;align-items:center;justify-content:space-between}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 10px rgba(127,209,166,.6)}
+  .pill{font-size:11px;font-weight:600;padding:3px 8px;border-radius:999px;background:rgba(255,255,255,.06);color:var(--muted)}
+  .pill.warn{background:rgba(224,192,123,.12);color:var(--warn)}
+  .pill.ok{background:rgba(127,209,166,.12);color:var(--ok)}
+
+  .btn{height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;gap:8px;
+    font-size:14px;font-weight:600;border:1px solid transparent}
+  .btn.primary{background:var(--accent);color:var(--ink);height:52px;font-size:15px}
+  .btn.secondary{background:var(--surface-hi);border-color:var(--hairline);color:var(--text)}
+  .btn.ghost{background:transparent;color:var(--muted)}
+  .stack{display:flex;flex-direction:column;gap:8px}
+
+  .recent{display:flex;align-items:center;gap:12px;padding:12px 16px}
+  .thumb{width:46px;height:46px;border-radius:8px;object-fit:cover;background:var(--surface-hi)}
+  .chev{color:var(--faint);font-size:16px}
+
+  .tabs{position:absolute;left:0;right:0;bottom:0;height:62px;display:flex;border-top:1px solid var(--hairline);
+    background:rgba(8,9,10,.94);backdrop-filter:blur(20px)}
+  .tab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+    font-size:9.5px;letter-spacing:1.1px;color:var(--faint)}
+  .tab.active{color:var(--text)}
+  .glyph{width:20px;height:20px;border:1.5px solid currentColor;border-radius:50%;opacity:.9}
+  .glyph.grid{border-radius:4px}
+  .glyph.opt{border-radius:6px;border-style:dashed}
+
+  /* live */
+  .live{position:absolute;inset:0;background:#000;display:flex;flex-direction:column}
+  .live .stage{flex:1;position:relative;display:flex;align-items:center;justify-content:center}
+  .live img{width:100%;height:100%;object-fit:contain;display:block}
+  .live .top{position:absolute;top:0;left:0;right:0;display:flex;align-items:flex-start;justify-content:space-between;
+    padding:16px 16px 0}
+  .round{width:38px;height:38px;border-radius:50%;background:rgba(12,14,16,.72);border:1px solid var(--hairline-strong);
+    display:flex;align-items:center;justify-content:center;font-size:16px;color:var(--text)}
+  .live-meta{text-align:center;padding-top:2px}
+  .live-meta .line{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px;
+    letter-spacing:1.1px;color:rgba(244,242,238,.86)}
+  .live-meta .model{margin-top:4px;font-family:var(--mono);font-size:10.5px;color:rgba(244,242,238,.5)}
+  .sep{width:1px;height:9px;background:rgba(255,255,255,.24)}
+  .live-bottom{position:absolute;left:0;right:0;bottom:0;padding:0 20px 28px;display:flex;flex-direction:column;gap:12px}
+  .live-row{display:flex;align-items:center;justify-content:space-between}
+  .shutter{width:76px;height:76px;border-radius:50%;border:2px solid rgba(244,242,238,.85);
+    display:flex;align-items:center;justify-content:center}
+  .shutter i{width:60px;height:60px;border-radius:50%;background:var(--accent);display:block}
+  .side{width:64px;display:flex;flex-direction:column;align-items:center;gap:5px;color:var(--muted);font-size:10.5px}
+
+  /* editor */
+  .ed-top{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--hairline)}
+  .ed-stage{height:300px;background:#000;display:flex;align-items:center;justify-content:center;position:relative}
+  .ed-stage img{width:100%;height:100%;object-fit:contain;filter:saturate(1.06) contrast(1.05) sepia(.08)}
+  .compare{position:absolute;right:12px;bottom:10px;display:flex;align-items:center;gap:5px;
+    background:rgba(12,14,16,.78);border:1px solid var(--hairline-strong);border-radius:999px;padding:5px 9px;
+    font-family:var(--mono);font-size:10.5px}
+  .panel{background:var(--bg-elev);border-top:1px solid var(--hairline);padding:12px 16px 0;height:calc(100% - 300px - 56px)}
+  .seg{display:flex;background:var(--bg);border:1px solid var(--hairline);border-radius:12px;padding:3px;gap:2px}
+  .seg div{flex:1;height:32px;display:flex;align-items:center;justify-content:center;border-radius:8px;
+    font-size:12.5px;font-weight:600;color:var(--muted)}
+  .seg div.on{background:var(--surface-hi);border:1px solid var(--hairline-strong);color:var(--text)}
+  .param{padding-top:12px}
+  .param .h{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  .param .h span:first-child{font-size:14px}
+  .track{height:2px;background:rgba(255,255,255,.12);border-radius:1px;position:relative}
+  .track i{position:absolute;top:0;bottom:0;background:var(--accent);border-radius:1px}
+  .track b{position:absolute;top:-6px;width:14px;height:14px;margin-left:-7px;border-radius:50%;
+    background:var(--bg);border:1.5px solid var(--accent)}
+  .actions{display:flex;gap:8px;padding:12px 0 16px}
+
+  /* gallery */
+  .g-head{display:flex;align-items:flex-end;justify-content:space-between;padding:12px 0 18px}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:3px}
+  .cell{position:relative}
+  .cell img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:4px;display:block}
+  .cell .meta{display:flex;align-items:center;justify-content:space-between;padding-top:5px}
+  .edited{width:5px;height:5px;border-radius:50%;background:var(--accent)}
+
+  footer{max-width:1720px;margin:48px auto 0;font-family:var(--mono);font-size:11px;color:var(--faint);
+    text-align:center;line-height:1.8}
+</style>
+</head>
+<body>
+  <div class="head">
+    <div>
+      <div class="eyebrow">A7M2 · ColorLink · v0.1.0</div>
+      <h1>界面预览</h1>
+      <div class="sub">近黑底 + 暖白字 + 1px 极细描边 · 令牌与 <span class="mono" style="font-size:12px">src/design/tokens.ts</span> 一一对应</div>
+    </div>
+    <div class="note">静态视觉预览（非运行截图）：由同一套 design token 复刻真实页面结构，
+      用于在构建 APK 前确认视觉方向。图片为 <span class="mono">scripts/demo-assets.mjs</span> 生成的演示素材。</div>
+  </div>
+
+  <div class="row">
+    <!-- 1. 相机 / 连接 -->
+    <div class="col">
+      <div class="phone">
+        <div class="statusbar"><span>9:41</span><span class="icons"><span class="bar"></span></span></div>
+        <div class="content">
+          <div style="padding-top:12px">
+            <div class="label">A7M2 · USB PTP2</div>
+            <div class="display">ColorLink</div>
+            <div class="muted" style="margin-top:4px">联机监视 · 一拍一传 · 本地调色</div>
+          </div>
+
+          <div class="card" style="margin-top:24px">
+            <div class="row-between">
+              <div style="display:flex;align-items:center;gap:6px"><span class="dot"></span><span class="muted" style="font-size:13.5px">已连接</span></div>
+              <span class="pill warn">演示模式</span>
+            </div>
+            <div style="font-size:21px;letter-spacing:-.5px;font-weight:600;margin-top:16px">ILCE-7M2</div>
+            <div class="mono-xs" style="margin-top:4px">demo 3.10 · 模拟帧</div>
+            <div class="hairline"></div>
+            <div style="display:flex;gap:12px">
+              <div style="flex:1"><div class="label">电量</div><div class="mono" style="margin-top:6px;font-size:12px">78%</div></div>
+              <div style="flex:1"><div class="label">存储</div><div class="mono" style="margin-top:6px;font-size:12px">214 张</div></div>
+              <div style="flex:1"><div class="label">取景</div><div class="mono" style="margin-top:6px;font-size:12px">14 fps</div></div>
+            </div>
+            <div class="stack" style="margin-top:16px">
+              <div class="btn primary">进入取景</div>
+              <div style="display:flex;gap:8px">
+                <div class="btn secondary" style="flex:1">远程快门</div>
+                <div class="btn ghost" style="flex:1">断开</div>
+              </div>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:8px;align-items:flex-start;margin-top:12px;padding:12px;border-radius:8px;
+                      background:var(--bg-elev);border:1px solid var(--hairline)">
+            <span style="color:var(--muted);font-size:13px">ⓘ</span>
+            <div class="mono-xs" style="line-height:1.6">当前构建未链接 expo-sony-camera：USB 联机走不通，先用演示模式验证全流程。</div>
+          </div>
+
+          <div class="row-between" style="margin-top:24px;margin-bottom:12px">
+            <div class="label">最近接收</div><div class="mono-xs">全部 6 →</div>
+          </div>
+          <div class="card" style="padding:0;overflow:hidden">
+            <div class="recent">
+              <img class="thumb" src="assets/demo/scene-dusk.png" alt="" />
+              <div style="flex:1">
+                <div class="mono" style="font-size:12px">demo_dusk.png</div>
+                <div class="mono-xs" style="margin-top:3px">14:30:12 · 1200 × 800 · 960 KB</div>
+              </div>
+              <span class="chev">›</span>
+            </div>
+            <div style="height:1px;background:var(--hairline);margin-left:16px"></div>
+            <div class="recent">
+              <img class="thumb" src="assets/demo/scene-chart.png" alt="" />
+              <div style="flex:1">
+                <div class="mono" style="font-size:12px">demo_chart.png</div>
+                <div class="mono-xs" style="margin-top:3px">14:29:12 · 1200 × 800 · 330 KB</div>
+              </div>
+              <span class="chev">›</span>
+            </div>
+          </div>
+        </div>
+        <div class="tabs">
+          <div class="tab active"><span class="glyph"></span>相机</div>
+          <div class="tab"><span class="glyph grid"></span>图库</div>
+          <div class="tab"><span class="glyph opt"></span>设置</div>
+        </div>
+      </div>
+      <div class="caption"><b>01</b> 相机 / 连接</div>
+    </div>
+
+    <!-- 2. 取景 -->
+    <div class="col">
+      <div class="phone">
+        <div class="live">
+          <div class="stage">
+            <img src="assets/demo/scene-dusk.png" alt="" />
+            <div class="top">
+              <div class="round">✕</div>
+              <div class="live-meta">
+                <div class="line"><span style="width:5px;height:5px;border-radius:3px;background:var(--danger);display:inline-block"></span>LIVE<span class="sep"></span>14 FPS<span class="sep"></span>78%</div>
+                <div class="model">ILCE-7M2 · demo 3.10</div>
+              </div>
+              <div class="round">▦</div>
+            </div>
+            <div class="live-bottom">
+              <div class="live-row">
+                <div class="side"><span style="font-size:17px">⏏</span>结束</div>
+                <div class="shutter"><i></i></div>
+                <div class="side"><span style="font-size:17px">▤</span>图库</div>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:center;gap:8px">
+                <span class="label">轻点画面 放大 1.8×</span>
+                <span class="pill warn">演示帧</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>02</b> 取景（全屏）</div>
+    </div>
+
+    <!-- 3. 编辑器 -->
+    <div class="col">
+      <div class="phone">
+        <div class="statusbar"><span>9:41</span><span class="icons"><span class="bar"></span></span></div>
+        <div class="ed-top">
+          <span style="width:24px;color:var(--muted)">‹</span>
+          <div style="flex:1">
+            <div class="mono" style="font-size:12px">demo_dusk.png</div>
+            <div class="mono-xs" style="margin-top:2px">1200×800 · 960 KB</div>
+          </div>
+          <span style="background:var(--accent);color:var(--ink);height:34px;padding:0 14px;border-radius:999px;
+                       display:flex;align-items:center;font-size:13px;font-weight:700">✓ 保存</span>
+        </div>
+        <div class="ed-stage">
+          <img src="assets/demo/scene-dusk.png" alt="" />
+          <div class="compare">⟨⟩ 按住对比</div>
+        </div>
+        <div class="panel">
+          <div class="seg"><div class="on">调色</div><div>预设</div><div>AI</div></div>
+          <div class="seg" style="margin-top:8px"><div class="on">光</div><div>色</div><div>细节</div><div>效果</div></div>
+
+          <div class="param">
+            <div class="h"><span>亮度</span><span class="mono" style="color:var(--accent);font-size:12px">+4</span></div>
+            <div class="track"><i style="left:50%;width:6%"></i><b style="left:56%"></b></div>
+          </div>
+          <div class="param">
+            <div class="h"><span>对比度</span><span class="mono" style="color:var(--accent);font-size:12px">+10</span></div>
+            <div class="track"><i style="left:50%;width:9%"></i><b style="left:59%"></b></div>
+          </div>
+          <div class="param">
+            <div class="h"><span>高光</span><span class="mono" style="color:var(--accent);font-size:12px">-14</span></div>
+            <div class="track"><i style="left:43%;width:7%"></i><b style="left:43%"></b></div>
+          </div>
+          <div class="param">
+            <div class="h"><span>阴影</span><span class="mono" style="color:var(--accent);font-size:12px">+10</span></div>
+            <div class="track"><i style="left:50%;width:9%"></i><b style="left:59%"></b></div>
+          </div>
+
+          <div class="actions">
+            <div class="btn ghost" style="flex:1">重置</div>
+            <div class="btn primary" style="flex:2;height:44px;font-size:14px">保存到相册</div>
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>03</b> 编辑器 · 调色</div>
+    </div>
+
+    <!-- 4. 图库 -->
+    <div class="col">
+      <div class="phone">
+        <div class="statusbar"><span>9:41</span><span class="icons"><span class="bar"></span></span></div>
+        <div class="content">
+          <div class="g-head">
+            <div>
+              <div class="label">本地图库</div>
+              <div style="font-size:21px;letter-spacing:-.5px;font-weight:600;margin-top:6px">6 张</div>
+            </div>
+            <div class="mono-xs">2026-10-29</div>
+          </div>
+          <div class="grid">
+            <div class="cell"><img src="assets/demo/scene-dusk.png" alt="" /><div class="meta"><span class="mono-xs" style="font-size:10px">1.0 MP</span><span class="edited"></span></div></div>
+            <div class="cell"><img src="assets/demo/scene-dawn.png" alt="" /><div class="meta"><span class="mono-xs" style="font-size:10px">1.0 MP</span></div></div>
+            <div class="cell"><img src="assets/demo/scene-ink.png" alt="" /><div class="meta"><span class="mono-xs" style="font-size:10px">1.0 MP</span></div></div>
+            <div class="cell"><img src="assets/demo/scene-skin.png" alt="" /><div class="meta"><span class="mono-xs" style="font-size:10px">1.0 MP</span><span class="edited"></span></div></div>
+            <div class="cell"><img src="assets/demo/scene-moss.png" alt="" /><div class="meta"><span class="mono-xs" style="font-size:10px">1.0 MP</span></div></div>
+            <div class="cell"><img src="assets/demo/scene-chart.png" alt="" /><div class="meta"><span class="mono-xs" style="font-size:10px">1.0 MP</span></div></div>
+          </div>
+        </div>
+        <div class="tabs">
+          <div class="tab"><span class="glyph"></span>相机</div>
+          <div class="tab active"><span class="glyph grid"></span>图库</div>
+          <div class="tab"><span class="glyph opt"></span>设置</div>
+        </div>
+      </div>
+      <div class="caption"><b>04</b> 图库</div>
+    </div>
+  </div>
+
+  <footer>
+    静态预览 · 真实实现见 <span class="mono">app/(tabs)/index.tsx</span> · <span class="mono">app/live.tsx</span> ·
+    <span class="mono">app/editor/[id].tsx</span> · <span class="mono">app/(tabs)/gallery.tsx</span><br />
+    调色预览中的饱和度/对比度是对图片做的近似示意；真机由 SkSL 着色器实时渲染。
+  </footer>
+</body>
+</html>

@@ -1,0 +1,13 @@
+# 统一换行：仓库内一律 LF，Windows 检出时再按需转换
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ttf binary
+*.keystore binary
+
+# 生成物 / 依赖
+node_modules/** -text
+package-lock.json linguist-generated=true

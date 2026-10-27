@@ -1,0 +1,52 @@
+{
+  "expo": {
+    "name": "ColorLink",
+    "slug": "a7m2-colorlink",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "colorlink",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#08090A",
+    "androidStatusBar": {
+      "backgroundColor": "#08090A",
+      "barStyle": "light-content",
+      "translucent": true
+    },
+    "ios": {
+      "supportsTablet": false
+    },
+    "android": {
+      "package": "app.colorlink.a7m2",
+      "adaptiveIcon": {
+        "backgroundColor": "#08090A",
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#08090A"
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "允许 ColorLink 读取相册以导出调色结果。",
+          "savePhotosPermission": "允许 ColorLink 把调色结果保存到相册。"
+        }
+      ],
+      "expo-secure-store",
+      "expo-image"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

@@ -1,0 +1,75 @@
+# CI / APK 构建说明
+
+## 工作流
+
+| 文件 | 触发 | 作用 |
+|---|---|---|
+| `.github/workflows/ci.yml` | push / PR | 15 分钟内跑完 typecheck + lint + 单测，给最快反馈 |
+| `.github/workflows/android-apk.yml` | push 到 `main` / 手动 `Run workflow` | 完整原生构建，产出 **debug APK** artifact |
+
+## 取 APK
+
+`Actions → Android APK → 最新 Run → 底部 Artifacts → colorlink-debug-apk.zip → 解压得到 app-debug.apk`
+
+> Artifact 下载需要登录 GitHub；命令行可以 `gh run download <run-id> -n colorlink-debug-apk`。
+
+## 为什么只出 debug APK
+
+debug APK 用 Android 调试证书签名，**可以直接安装测试**，但：
+
+- 不能上传 Google Play；
+- 不能做「覆盖升级」形式的对外分发（换机器/换 CI 后签名会变）；
+- 部分系统会提示"来源未知"，需要手动允许安装。
+
+## 需要正式签名的 release APK
+
+1. 本地生成一个长期 keystore：
+
+   ```bash
+   keytool -genkeypair -v -storetype PKCS12 \
+     -keystore release.keystore -alias colorlink \
+     -keyalg RSA -keysize 2048 -validity 10000
+   base64 -w 0 release.keystore > release.keystore.b64   # macOS 用 base64 -i
+   ```
+
+2. 在仓库 `Settings → Secrets and variables → Actions` 添加：
+
+   | Secret | 值 |
+   |---|---|
+   | `ANDROID_KEYSTORE_BASE64` | `release.keystore.b64` 的内容 |
+   | `ANDROID_KEYSTORE_PASSWORD` | keystore 口令 |
+   | `ANDROID_KEY_ALIAS` | `colorlink` |
+   | `ANDROID_KEY_PASSWORD` | key 口令 |
+
+3. 在 `android-apk.yml` 里加一个 release job（或在现有 job 里加 step）：
+
+   ```yaml
+   - name: Decode keystore
+     run: |
+       echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/release.keystore
+
+   - name: Build release APK
+     env:
+       KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+       KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+       KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+     run: |
+       cd android
+       ./gradlew assembleRelease --no-daemon \
+         -Pandroid.injected.signing.store.file=$PWD/app/release.keystore \
+         -Pandroid.injected.signing.store.password=$KEYSTORE_PASSWORD \
+         -Pandroid.injected.signing.key.alias=$KEY_ALIAS \
+         -Pandroid.injected.signing.key.password=$KEY_PASSWORD
+   ```
+
+   产物路径：`android/app/build/outputs/apk/release/app-release.apk`
+
+## 常见失败与处理
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| `NDK not found` / `ndkVersion` 报错 | RN 模板要求的 NDK 与工作流预装版本不同 | AGP 会按 `ndkVersion` 自动下载；若失败，把 `sdkmanager --install "ndk;<版本>"` 里的版本改成 `android/build.gradle` 里写的那个 |
+| `Keystore file not set for signing config release` | 用了 release 但没有签名配置 | 先只打 debug，或按上文加 secrets |
+| Gradle OOM / 构建被杀 | Skia + Reanimated 编译吃内存 | 已设置 `-Xmx4g`；必要时把 `assembleDebug` 拆成 `:app:assembleDebug` 单模块 |
+| `npm ci` 报 lock 不一致 | 改了 `package.json` 没更新 lock | 本地 `npm install` 后一起提交 `package-lock.json` |
+| 构建超 60 分钟 | 冷缓存 + 低配 runner | 保留 Gradle 缓存（工作流已配），或改用 self-hosted runner |
