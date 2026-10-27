@@ -33,17 +33,25 @@
 
 ## 安装
 
-### 方式一：下载构建好的 APK
+### 方式一：下载发行版（推荐）
 
-1. 打开 [Actions → Android APK](https://github.com/accten/ColorLink-A7M2/actions/workflows/android-apk.yml)
-2. 点最近一次绿色运行，页面底部 **Artifacts → colorlink-apk** 下载（需登录 GitHub）
-3. 解压得到 `app-release.apk`，传到手机安装；或直接 `adb install -r app-release.apk`
+打开 **[Releases](https://github.com/accten/ColorLink-A7M2/releases)**，在最新版本里下载 `app-release.apk`，
+传到手机上安装（首次需允许「安装未知来源应用」）；也可以：
 
-也可以命令行：`gh run download <run-id> -n colorlink-apk`
+```bash
+adb install -r app-release.apk
+```
 
-> 这个 APK 用 Android 调试证书签名、只含 arm64，**适合自测**；不能上架、也不适合对外分发。
+发行版由推 `v*` tag 自动构建并附在 Release 里，是**匿名可下载**的正式入口。
 
-### 方式二：从源码构建
+### 方式二：Actions 里的构建产物（每次提交都有）
+
+每次推送到 `main` 都会构建一次，产物在
+[Actions → Android APK](https://github.com/accten/ColorLink-A7M2/actions/workflows/android-apk.yml)
+的 Artifacts（`colorlink-apk`）里。它需要登录 GitHub、保留 30 天、下载后要解压——
+适合想看最新提交的人，日常安装用 Releases 就行。
+
+### 方式三：从源码构建
 
 ```bash
 npm install

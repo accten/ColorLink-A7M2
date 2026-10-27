@@ -3,6 +3,8 @@ name: Android APK
 on:
   push:
     branches: [main]
+    # 推 v* tag 时自动发一个 GitHub Release，并把 APK 挂上去
+    tags: ['v*']
     paths-ignore:
       - '**.md'
       - 'docs/**'
@@ -15,7 +17,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # 创建 Release 需要写权限；其余步骤只用读
+  contents: write
 
 concurrency:
   group: apk-v2-${{ github.ref }}
@@ -147,6 +150,30 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # 只有推 tag 才发版：main 上的普通推送仍然只产出 artifact，
+      # 避免把每次提交都变成"发行版"。
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.apk
+          name: ColorLink ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            ## 安装
+
+            1. 下载下面的 `app-release.apk`
+            2. 手机上打开安装（首次需允许「安装未知来源应用」）
+            3. 或者用 `adb install -r app-release.apk`
+
+            ## 说明
+
+            - 用 Android 调试证书签名，适合自测；不能上架
+            - 只含 `arm64-v8a`，适用于近几年的安卓手机
+            - 内置 JS bundle，安装后不依赖电脑；首次启动会进入演示模式
+            - 真机 USB 联机仍需额外接入原生模块（见仓库 docs/sony-transport.md）
+
       - name: Upload build reports on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -157,3 +184,4 @@ jobs:
             android/build/reports/**
           if-no-files-found: ignore
           retention-days: 7
+
