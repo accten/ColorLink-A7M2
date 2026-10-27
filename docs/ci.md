@@ -1,5 +1,19 @@
 # CI / APK 构建说明
 
+## 实测结果
+
+| 项 | 值 |
+|---|---|
+| 运行 | [Android APK #12](https://github.com/accten/ColorLink-A7M2/actions/runs/40476885459)（public 仓库，`ubuntu-latest` 4 核 / 16GB） |
+| 耗时 | 20 分 20 秒（含 NDK / Gradle 冷启动） |
+| 产物 | `colorlink-apk.zip` 30.7 MB → `app-release.apk` 57.4 MB |
+| ABI | `arm64-v8a` 单架构（覆盖全部现代安卓手机） |
+| 自包含 | `assets/index.android.bundle` 4.0 MB（Hermes），不依赖 Metro |
+| 原生命令库 | `librnskia.so`、`libreanimated.so`、`libworklets.so`、`libhermesvm.so`、`libgesturehandler.so`、`libappmodules.so` … |
+| SHA-256 | `6c11f7ca55e43798ca24a32f5bc1e51bd11db9ae569d4819299887e5766a4aa4` |
+
+第一次构建（私有仓库）连续失败 9 次，最终定位为 runner 资源不足，结论见下文。
+
 ## 工作流
 
 | 文件 | 触发 | 作用 |

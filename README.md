@@ -43,6 +43,9 @@ npx expo run:android                   # 装到真机
 3. `./gradlew assembleRelease` 出 **自包含 APK**（已内联 Hermes bundle，不依赖 Metro）；
 4. 把 APK 作为 Actions artifact 上传（保留 30 天）。
 
+**已验证**：[Android APK #12](https://github.com/accten/ColorLink-A7M2/actions/runs/40476885459)
+在 `ubuntu-latest` 上 20 分钟构建成功，产物 `colorlink-apk.zip`（30.7 MB）→ 解压得到 `app-release.apk`。
+
 取包路径：`GitHub → Actions → Android APK → 最近一次运行 → 页面底部 Artifacts → colorlink-apk`，
 解压得到 `app-release.apk`；也可以命令行 `gh run download <run-id> -n colorlink-apk`。
 首次构建约 15~25 分钟（含 Gradle/NDK 冷启动），之后有缓存会快很多。
@@ -50,6 +53,10 @@ npx expo run:android                   # 装到真机
 > 这里产出的 release APK 由 Expo prebuild 默认的 **debug keystore** 签名，可以直接
 > `adb install` 到手机自测，但没有正式签名，不能上架、也不适合对外分发。
 > 需要正式签名时按 `docs/ci.md` 加 4 个 Secrets 并改用 release 签名配置。
+>
+> 构建只编 `arm64-v8a`（覆盖全部现代安卓手机）。私有仓库的 runner 只有 2 核/7GB，
+> 会在原生编译阶段被 OOM 打死；本仓库已改为 public，runner 升级到 4 核/16GB 后一次通过。
+> 若以后改回私有，需要 larger runner 或自托管 runner。
 
 
 ```bash
