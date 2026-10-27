@@ -121,6 +121,7 @@ npm test            # 99 个纯逻辑用例：参数校验 / LUT / AI 解析 / �
 
 ## 进阶文档
 
+- `docs/testing.md` — 装好之后的自测清单：五轮、约 20 分钟，带预期结果与排查方式
 - `docs/ci.md` — GitHub Actions 出包、正式签名（keystore + Secrets）、常见构建失败
 - `docs/sony-transport.md` — 接入真机 USB 联机：模块安装、wrapper、A7M2 需要打的补丁
 
