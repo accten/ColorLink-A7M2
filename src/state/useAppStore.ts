@@ -1,14 +1,14 @@
 import * as Haptics from 'expo-haptics';
 import { create } from 'zustand';
 
-import { Asset } from '@/core/asset';
+import { Asset, isDuplicateCapture } from '@/core/asset';
 import { EditParams, DEFAULT_PARAMS, withParam } from '@/core/params';
 import { BUILTIN_PRESETS, Preset } from '@/core/presets';
 import { eventLog } from '@/core/log';
 import { CameraMode, CameraSnapshot, CapturedPhoto, ICameraTransport, IDLE_SNAPSHOT } from '@/services/camera/types';
 import { DemoCameraTransport } from '@/services/camera/demo';
 import { createUsbTransport } from '@/services/camera/usb';
-import { assetFromPhoto, deleteAssetFile, findDuplicate, loadAssets, saveAssets, seedDemoAssets } from '@/services/library';
+import { assetFromPhoto, deleteAssetFile, loadAssets, saveAssets, seedDemoAssets } from '@/services/library';
 import {
   DEFAULT_SETTINGS,
   Settings,
@@ -103,19 +103,20 @@ export const useAppStore = create<AppState>((set, get) => {
     void saveAssets(assets).catch((error) => eventLog.error('library.save.failed', { error: String(error) }));
   };
 
-  /** 一拍一传的落库：摘要去重 → 插到最前 → 持久化 → 轻触觉反馈。 */
+  /** 一拍一传的落库：摘要去重（仅真机）→ 插到最前 → 持久化 → 轻触觉反馈。 */
   const ingestPhoto = async (photo: CapturedPhoto) => {
     const state = get();
-    if (findDuplicate(state.assets, photo.hash)) {
+    const mode = transport?.mode ?? 'demo';
+    if (isDuplicateCapture(mode, state.assets, photo.hash)) {
       eventLog.warn('ingest.duplicate', { fileName: photo.fileName });
       return;
     }
-    const asset = assetFromPhoto(photo, transport?.mode === 'usb' ? 'camera' : 'demo', state.assets.length + 1);
+    const asset = assetFromPhoto(photo, mode === 'usb' ? 'camera' : 'demo', state.assets.length + 1);
     const next = [asset, ...state.assets];
     set({ assets: next, lastCaptureAt: Date.now(), receivedCount: state.receivedCount + 1 });
     persist(next);
     haptic('success');
-    eventLog.info('ingest.ok', { fileName: asset.fileName, bytes: asset.bytes });
+    eventLog.info('ingest.ok', { fileName: asset.fileName, bytes: asset.bytes, mode });
   };
 
   const attach = async (mode: CameraMode) => {

@@ -2,8 +2,41 @@
 
 - 版本：ColorLink v0.1.0
 - 环境：Windows 11 / Node 24.15 / npm 11.12 / Expo SDK 58.0.19 / RN 0.88 / TypeScript 6.0.3
-- 结论：**静态质量门全绿；本轮共发现并修复 6 个缺陷（含 2 个会直接导致产物错误的真 bug）**。
-  由于本机没有 Java / Android SDK，**APK 构建与真机用例未执行**，第 4 节给出可直接照做的手测清单。
+- 真机：OPPO Find X8 Ultra（PKJ110）/ Android 17 / 1440×3168 @640dpi，通过 adb 驱动实测
+- 结论：静态质量门全绿；**真机实测又发现并修复 5 个缺陷**（资源读取、滑块交互、LUT 色带、相册导出 API、导出提示）。
+  所有修复均已重新构建并在真机上复验。
+
+---
+
+## 0. 真机实测记录（adb 驱动，非人工点按）
+
+| 项 | 结果 |
+|---|---|
+| 安装 / 冷启动 | ✅ `adb install` 成功，秒开 |
+| 首页状态卡 / 底部 Tab | ✅ 与设计稿一致 |
+| 演示素材种入 | ✅ 6 张（900×600，192–273 KB），`seeded → ingest.materialized` 日志正常 |
+| 图库网格 | ✅ 6 张、倒序、0.5 MP 角标 |
+| 编辑器渲染（Skia/SkSL） | ✅ 画面正常，参数面板分组与滑块齐备 |
+| 亮度滑块（客观测量） | ✅ 基线 Luma 145.5 → +100 时 242.0；拖回中间**精确回到 145.5** |
+| 点按圆点（修复前跳变） | ✅ 现在 145.5 → 144.5（不再跳到 -100） |
+| 预设（胶片/电影感/暖调） | ✅ 暖调 R 177.6→189.8、B 114.8→110.8（方向正确） |
+| LUT 导入（.cube，经系统文件选择器） | ✅ 导入成功、名称显示、浓度可调；三线性后无色带 |
+| 导出 JPEG | ✅ `demo_dusk_edited_<时间戳>.jpg`，50 KB，写入 App 目录成功 |
+| 保存到相册（MediaStore） | ✅ 改用 `Asset.create()` 后写入成功（见缺陷 D5） |
+| 未配置 Key 的 AI 入口 | ⏳ 待复验（面板置灰/提示逻辑未变） |
+
+### 真机暴露的 5 个缺陷
+
+| # | 现象 | 根因 | 修复 |
+|---|---|---|---|
+| D1 | 图库 0 张、每次快门 `camera.capture.failed` | release 包里 `expo-asset` 的 `uri` 是资源键 `assets_demo_scenedusk`，`new File()` 抛 `URI is not absolute` | 演示素材改为**内联 base64**（`framesB64.ts`），落盘直接写字节，不再依赖 expo-asset 路径；新增 `core/base64.ts` + 6 个单测 |
+| D2 | 手指按在滑块圆点上，数值直接跳到端点 | 用了 `locationX`（相对被按中的子视图） | 改 `pageX` + `measureInWindow` 记录轨道原点 |
+| D3 | 套 LUT 后出现同心色带 | 只对蓝轴插值，r/g 用最近邻 → 17³ 量化成 17 级 | 8 点三线性插值（纹理仍 nearest） |
+| D4 | 「保存到相册」静默失败，提示仍说"已保存" | 先 `requestPermissionsAsync` 在 Android 17 拿 denied 就跳过 | 直接写 MediaStore，失败再申请，并把原因如实显示 |
+| D5 | 相册仍写不进去 | `saveToLibraryAsync` 在 SDK 58 已废弃、调用即抛错 | 改用新 API `Asset.create(uri)` |
+
+> 另外把可观测性补上了：事件日志现在显示 data（错误原因），`console` 同步到 logcat；
+> 否则 D1 只能看到 `library.seed.failed` 这一个词，根本定位不到 URI 问题。
 
 ---
 
@@ -13,12 +46,12 @@
 |---|---|---|---|
 | 1 | 类型检查（strict） | `npx tsc --noEmit` | ✅ 0 error |
 | 2 | Lint（eslint-config-expo + react-hooks 规则） | `npx eslint app src tests` | ✅ 0 error / 0 warning |
-| 3 | 纯逻辑单测 | `npx vitest run` | ✅ 7 文件 / **99 用例全通过** |
+| 3 | 纯逻辑单测 | `npx vitest run` | ✅ 9 文件 / **109 用例全通过** |
 | 4 | 依赖与配置体检 | `npx expo-doctor` | ✅ 20/20 通过 |
 | 5 | 应用配置解析 | `npx expo config --type public` | ✅ 通过（含插件解析） |
 | 6 | 生产打包（Metro + Hermes） | `npx expo export -p android` | ✅ 生成 android bundle |
-| 7 | 素材生成可复现 | `node scripts/demo-assets.mjs`、`node scripts/brand-assets.mjs` | ✅ 6 场景 + 5 图标 |
-| 8 | APK 构建 / 真机运行 | `npx expo prebuild && expo run:android` | ⏸ 未执行（缺 Android SDK / JDK） |
+| 7 | 素材生成可复现 | `node scripts/demo-assets.mjs`、`node scripts/brand-assets.mjs` | ✅ 6 场景 + 5 图标 + base64 模块 |
+| 8 | APK 构建 / 真机运行 | GitHub Actions + `adb install` | ✅ 构建 20 分钟，真机跑通 |
 
 ### 覆盖范围（单测按文件）
 
@@ -34,18 +67,19 @@
 
 ---
 
-## 2. 本轮发现并修复的缺陷
+## 2. 静态阶段发现并修复的缺陷
 
 | # | 缺陷 | 影响 | 修复 |
 |---|---|---|---|
 | B-1 | **导出只裁切不缩放**：`ImageShader` 的坐标是像素空间，直接按目标尺寸画 rect 只会取原图左上角 | 导出 4000px 时得到"放大后的左上角"而不是整图，成品直接不可用 | 导出改为两趟：先 `drawImageRectOptions` 重采样到目标尺寸，再用 1:1 纹理跑调色 shader（`src/services/grading.ts`） |
 | B-2 | **uniform 顺序与 SKSL 声明不一致**：`PARAM_LIST` 按 UI 分组排列（高光/阴影在饱和度之前），SKSL 按职能排列 | 参数串位（拖"饱和度"实际改了"色温"），颜色错但界面一切正常，极难肉眼定位 | 以 SKSL 为准重排 `PARAM_LIST` 并在注释里写明"顺序即契约"；新增 `tests/shader.test.ts` 双端钉死 |
-| B-3 | **同一秒导出两次会覆盖文件** | 违反 FR-07「不覆盖已有输出」，连拍后连续导出会丢结果 | 新增 `uniqueFileName()`（`-2`/`-3` 递增），导出路径接入 |
+| B-3 | **同一秒导出两次会覆盖文件** | 违反「不覆盖已有输出」，连拍后连续导出会丢结果 | 新增 `uniqueFileName()`（`-2`/`-3` 递增），导出路径接入 |
 | B-4 | 导出扩展名沿用源图（PNG 源 → 内容为 JPEG 的 `.png`） | 部分相册/编辑器按扩展名解码失败 | `exportFileName()` 固定 `.jpg`，并加用例锁定 |
 | B-5 | `app.json` 含非法字段 `androidNavigationBar`（SDK 58 已移出 schema） | `expo prebuild` 前的配置校验失败，构建可能直接中止 | 删除该字段；`expo-doctor` 恢复 20/20 |
 | B-6 | 6 处 React 反模式：渲染期读写 `ref`、effect 内同步 `setState`、`useRef(new Animated.Value())` | 未来 React Compiler 下会出隐蔽的重渲染/动画失效；也是 lint 报错来源 | 轨道宽度改 `useState`，动画值改 `useState(() => new Animated.Value())`，effect 内只做异步更新；快门反馈改为按压时触发 |
 
-> B-1、B-2 属于"编译通过、界面正常、结果错误"的类型，正是这一轮验证最有价值的产出。
+> B-1、B-2 属于"编译通过、界面正常、结果错误"的类型，是静态阶段最有价值的产出；
+> 真机阶段的 D1~D5（见第 0 节）则全部是只有真机才会暴露的问题。
 
 ---
 

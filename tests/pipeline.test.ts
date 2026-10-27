@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   exportFileName,
   findAssetByHash,
+  isDuplicateCapture,
   newAssetId,
   uniqueFileName,
   type Asset,
@@ -37,6 +38,15 @@ describe('一拍一传去重', () => {
 
   it('新摘要判为不重复', () => {
     expect(findAssetByHash(assets, 'hash-c')).toBeUndefined();
+  });
+
+  it('真机模式下同摘要视为重复（避免同一张相机文件导入两次）', () => {
+    expect(isDuplicateCapture('usb', assets, 'hash-a')).toBe(true);
+    expect(isDuplicateCapture('usb', assets, 'hash-c')).toBe(false);
+  });
+
+  it('演示模式下同摘要也照收（每次快门都是一张新照片）', () => {
+    expect(isDuplicateCapture('demo', assets, 'hash-a')).toBe(false);
   });
 
   it('连续 5 次拍摄、其中 2 次同图 → 只入库 4 张', () => {

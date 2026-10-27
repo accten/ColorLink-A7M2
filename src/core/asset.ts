@@ -76,6 +76,22 @@ export function findAssetByHash(assets: readonly Asset[], hash: string): Asset |
   return assets.find((a) => a.originalHash === hash);
 }
 
+/**
+ * 是否应当把这次"拍摄"当作重复丢弃。
+ *
+ * 去重是为了避免同一张相机文件被导入两次；但**演示模式下每次快门就是一张新照片**，
+ * 像素与示例图相同（SHA-256 相同），若也走去重，连按快门会一张都进不了图库
+ * —— 真机上正是这么暴露的（日志里 ingest.duplicate 连刷）。
+ */
+export function isDuplicateCapture(
+  mode: 'demo' | 'usb',
+  assets: readonly Asset[],
+  hash: string,
+): boolean {
+  if (mode === 'demo') return false;
+  return findAssetByHash(assets, hash) !== undefined;
+}
+
 export function formatBytes(bytes: number | undefined | null): string {
   if (!bytes || bytes < 0) return '—';
   if (bytes < 1024) return `${bytes} B`;
