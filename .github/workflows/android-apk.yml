@@ -9,6 +9,8 @@ on:
       - '**.md'
       - 'docs/**'
       - 'design-preview.html'
+      - 'luts/**'
+      - 'scripts/**'
       - '.gitignore'
       - '.gitattributes'
       - 'LICENSE'
