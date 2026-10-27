@@ -1,6 +1,4 @@
-import { Asset as ExpoAsset } from 'expo-asset';
-import { File } from 'expo-file-system';
-
+import { base64ToBytes } from '@/core/base64';
 import { ingestFileName } from '@/core/asset';
 import { eventLog } from '@/core/log';
 import { DemoFrame } from '@/features/demo/frames';
@@ -8,15 +6,12 @@ import { sha256OfFile } from '@/services/ingest';
 import { ingestFile } from '@/services/paths';
 
 /**
- * 把打包进 APK 的演示素材"当作相机回传"，落进 ingest/ 并算摘要。
+ * 把演示素材"当作相机回传"落进 ingest/ 并算摘要。
  *
- * 之前这段逻辑在 camera/demo.ts 与 library.ts 各写了一遍，两处都要处理
- * expo-asset → File 的边界，出问题时又都只留一句 "seed.failed"，真机上根本没法定位。
- * 现在合成一份，并且**每一步都编号记日志**：取不到本地路径 / 读不到字节 / 写盘失败 / 摘要失败，
- * 一眼就能看出断在哪。
+ * 数据来源是内联 base64（见 features/demo/frames.ts 的说明）：
+ * release 包里 expo-asset 给不出可读文件路径，直接写字节最稳。
  *
- * 另一个改动：不用 `File.copy()`（它假设源是普通文件路径），改成显式 bytes() → write()，
- * 对 APK 内嵌资源更稳。
+ * 每一步都编号记日志——真机排查时，看事件日志就知道断在解码、写盘还是摘要。
  */
 
 export interface MaterializedAsset {
@@ -38,54 +33,40 @@ async function persistFrame(frame: DemoFrame, fileName: string, reuseIfExists: b
   const started = Date.now();
   const target = ingestFile(fileName);
 
-  // 已存在且可信：直接复用，避免每次启动都重写 6MB
+  // 已存在则复用，避免每次启动都重写
   if (reuseIfExists && target.exists) {
     const existingSize = target.size ?? 0;
     if (existingSize > 0) {
-      const hash = await sha256OfFile(target);
       return {
         uri: target.uri,
         fileName,
         bytes: existingSize,
         width: frame.width,
         height: frame.height,
-        hash,
+        hash: await sha256OfFile(target),
         capturedAt: Date.now(),
       };
     }
   }
 
-  let asset: ExpoAsset;
-  try {
-    asset = ExpoAsset.fromModule(frame.module);
-  } catch (error) {
-    throw new Error(`[1/5] Asset.fromModule 失败：${describeError(error)}`);
-  }
-
-  try {
-    await asset.downloadAsync();
-  } catch (error) {
-    throw new Error(`[2/5] asset.downloadAsync 失败：${describeError(error)}`);
-  }
-
-  const localUri = asset.localUri ?? asset.uri;
-  if (!localUri) throw new Error(`[3/5] 资源没有本地路径（${frame.key}）`);
-
   let data: Uint8Array;
   try {
-    const source = new File(localUri);
-    if (!source.exists) throw new Error(`文件不存在：${localUri}`);
-    data = await source.bytes();
+    data = base64ToBytes(frame.base64);
   } catch (error) {
-    throw new Error(`[3/5] 读取资源失败（${localUri}）：${describeError(error)}`);
+    throw new Error(`[1/4] 解码内联素材失败（${frame.key}）：${describeError(error)}`);
   }
-  if (!data || data.length === 0) throw new Error(`[3/5] 资源字节为空（${localUri}）`);
+  if (!data.length) throw new Error(`[1/4] 内联素材为空（${frame.key}）`);
 
   try {
     if (target.exists) target.delete();
     await target.write(data);
   } catch (error) {
-    throw new Error(`[4/5] 写入 ingest 失败（${fileName}）：${describeError(error)}`);
+    throw new Error(`[2/4] 写入 ingest 失败（${fileName}）：${describeError(error)}`);
+  }
+
+  const written = target.size ?? 0;
+  if (written !== data.length) {
+    eventLog.warn('ingest.size.mismatch', { fileName, expected: data.length, actual: written });
   }
 
   const hash = await sha256OfFile(target);

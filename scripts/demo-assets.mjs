@@ -14,8 +14,11 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = join(ROOT, 'assets', 'demo');
-const W = 1200;
-const H = 800;
+const W = 900;
+const H = 600;
+// 演示素材会被内联成 base64 进 JS（见 framesB64.ts）：颗粒是噪声，会让 PNG 体积翻几倍，
+// 而颗粒在调色面板里本来就能实时加，所以这里压到最低。
+const BAKED_GRAIN_MAX = 0.45;
 
 /* ---------------- PNG 编码 ---------------- */
 const CRC_TABLE = (() => {
@@ -316,12 +319,35 @@ const scenes = {
 };
 
 mkdirSync(OUT, { recursive: true });
+
+/** @type {Record<string, string>} */
+const base64ByKey = {};
+
 for (const [name, scene] of Object.entries(scenes)) {
   const c = canvas();
   scene.draw(c);
   tonemap(c, scene.exposure);
+  const png = encodePng(W, H, toSrgb(c, Math.min(scene.grain, BAKED_GRAIN_MAX), name.length * 97));
   const file = join(OUT, `scene-${name}.png`);
-  writeFileSync(file, encodePng(W, H, toSrgb(c, scene.grain, name.length * 97)));
-  console.log('generated', file);
+  writeFileSync(file, png);
+  base64ByKey[name] = png.toString('base64');
+  console.log('generated', file, `${Math.round(png.length / 1024)} KB`);
 }
+
+const b64Path = join(ROOT, 'src', 'features', 'demo', 'framesB64.ts');
+mkdirSync(dirname(b64Path), { recursive: true });
+const lines = [
+  '// 由 scripts/demo-assets.mjs 生成，请勿手改。',
+  '// 用途：演示素材的字节内联进 JS，落盘时不依赖 expo-asset 的路径解析。',
+  'export const DEMO_WIDTH = ' + W + ';',
+  'export const DEMO_HEIGHT = ' + H + ';',
+  '',
+  'export const DEMO_B64: Record<string, string> = {',
+  ...Object.entries(base64ByKey).map(([key, b64]) => `  ${key}: '${b64}',`),
+  '};',
+  '',
+];
+writeFileSync(b64Path, lines.join('\n'));
+const totalB64 = Object.values(base64ByKey).reduce((sum, s) => sum + s.length, 0);
+console.log(`base64 module: ${b64Path} (${Math.round(totalB64 / 1024)} KB)`);
 console.log(`done: ${Object.keys(scenes).length} scenes @ ${W}x${H}`);
