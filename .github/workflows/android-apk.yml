@@ -25,8 +25,10 @@ concurrency:
 jobs:
   build-debug-apk:
     name: Build APK
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # ubuntu-26.04 镜像上出现过 runner 在原生编译途中被回收（shutdown signal），
+    # 22.04 是 Android 构建验证最充分的镜像。
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
 
     env:
       CI: '1'
@@ -111,9 +113,13 @@ jobs:
           # 只编 arm64-v8a：4 个 ABI 同时编 Skia/Reanimated 的 C++ 会打爆
           # runner 内存（表现为 exit 143 / SIGTERM，无任何 Gradle 报错）。
           # 自测 APK 也关掉 R8，省内存也省时间。
-          ./gradlew assembleRelease --no-daemon --stacktrace --max-workers=2 \
+          free -h || true
+          nproc || true
+          ./gradlew assembleRelease --no-daemon --stacktrace --max-workers=1 \
             -PreactNativeArchitectures=arm64-v8a \
-            -Pandroid.enableMinifyInReleaseBuilds=false
+            -Pandroid.enableMinifyInReleaseBuilds=false \
+            -Porg.gradle.parallel=false \
+            -Pkotlin.compiler.execution.strategy=in-process
 
       - name: Collect APK
         run: |
