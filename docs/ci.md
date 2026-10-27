@@ -69,6 +69,7 @@ debug APK 用 Android 调试证书签名，**可以直接安装测试**，但：
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | `Warning: Failed to find package 'tools'` + job 挂在 "Setup Android SDK" | `android-actions/setup-android@v3` 内部执行 `sdkmanager tools`，新版 cmdline-tools（16.x）已无该包 | **不要用这个 action**；`ubuntu-latest` 已预装 SDK，直接用 `sdkmanager` |
+| `sdkmanager: command not found`（exit 127） | 预装 SDK 的 cmdline-tools 不在 PATH 上 | 把 `$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin \| head -n1)` 追加到 `$GITHUB_PATH`（工作流已做） |
 | `NDK not found` / `ndkVersion` 报错 | RN 模板要求的 NDK 与工作流预装版本不同 | AGP 会按 `ndkVersion` 自动下载；若失败，把 `sdkmanager --install "ndk;<版本>"` 换成 `android/build.gradle` 里的实际版本 |
 | `Keystore file not set for signing config release` | 用了 release 但没有签名配置 | 先只打 debug，或按上文加 secrets |
 | Gradle OOM / 构建被杀 | Skia + Reanimated 编译吃内存 | 已设置 `-Xmx4g`；必要时拆成 `:app:assembleDebug` 单模块 |
