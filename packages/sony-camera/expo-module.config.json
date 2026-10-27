@@ -1,0 +1,18 @@
+{
+  "platforms": [
+    "android",
+    "apple"
+  ],
+  "android": {
+    "modules": [
+      "expo.modules.sonycamera.SonyCameraModule",
+      "expo.modules.sonycamera.SonyUsbStreamingModule"
+    ]
+  },
+  "apple": {
+    "modules": [
+      "SonyCameraModule",
+      "SonyUsbStreamingModule"
+    ]
+  }
+}

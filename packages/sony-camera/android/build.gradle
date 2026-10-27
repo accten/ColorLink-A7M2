@@ -1,0 +1,29 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.sonycamera'
+version = '0.2.1'
+
+android {
+  namespace "expo.modules.sonycamera"
+  defaultConfig {
+    versionCode 201
+    versionName "0.2.1"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+repositories {
+    // 本地 AAR 只能通过仓库解析：直接 files('*.aar') 会让 AGP 在构建本模块 AAR 时报
+    // "Direct local .aar file dependencies are not supported"
+    flatDir { dirs "$projectDir/libs" }
+}
+
+dependencies {
+  implementation(name: 'UVCAndroid-sony-bulk-patched', ext: 'aar')
+  testImplementation 'junit:junit:4.13.2'
+}
