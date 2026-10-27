@@ -6,7 +6,11 @@ import { eventLog } from '@/core/log';
 import { sha256OfFile } from '@/services/ingest';
 import { ingestFile } from '@/services/paths';
 
+import { connectSucceeded, isConnectedPhase, shouldWaitForState } from './connect-rules';
 import { CameraError, CameraSnapshot, CapturedPhoto, ICameraTransport, IDLE_SNAPSHOT } from './types';
+
+/** 握手超时：PTP2 开会话 + 读设备属性，慢的时候几秒；超过这个时间就认为连不上 */
+const CONNECT_TIMEOUT_MS = 15000;
 
 /**
  * 真机 USB 联机（PTP2），基于 expo-sony-camera 原生模块。
@@ -157,10 +161,49 @@ export class SonyCameraTransport implements ICameraTransport {
       preferredProtocol: 'sony_camera_control_ptp2',
     });
     this.applyState(state);
-    if (this.snap.phase === 'error') {
-      throw new Error(this.snap.error?.message ?? '相机连接失败');
+
+    // 模块在「没有相机接入」时也会正常返回 disconnected，必须自己判定失败，
+    // 否则界面会显示已连接、取景全黑（真机踩到过）。
+    if (!connectSucceeded(state.state) && shouldWaitForState(state.state)) {
+      await this.waitForSettled(CONNECT_TIMEOUT_MS);
     }
+
+    if (!isConnectedPhase(this.snap.phase)) {
+      const failure = this.snap.error ?? describeError(state);
+      this.snap = { ...this.snap, phase: 'error', error: failure };
+      for (const listener of this.stateListeners) listener(this.snap);
+      eventLog.error('camera.connect.failed', { state: state.state, message: failure.message });
+      throw new Error(failure.message);
+    }
+
     return this.snap;
+  }
+
+  /** 等状态事件把连接推进到终态（或超时）。 */
+  private waitForSettled(timeoutMs: number): Promise<void> {
+    const settled = (phase: CameraSnapshot['phase']) =>
+      phase === 'ready' || phase === 'live' || phase === 'error' || phase === 'idle';
+    if (settled(this.snap.phase)) return Promise.resolve();
+
+    return new Promise((resolve) => {
+      let finished = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let unsubscribe: (() => void) | undefined;
+
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        if (timer) clearTimeout(timer);
+        unsubscribe?.();
+        resolve();
+      };
+
+      unsubscribe = this.subscribe((snapshot) => {
+        if (settled(snapshot.phase)) finish();
+      });
+      timer = setTimeout(finish, timeoutMs);
+      if (settled(this.snap.phase)) finish();
+    });
   }
 
   async disconnect(): Promise<void> {
