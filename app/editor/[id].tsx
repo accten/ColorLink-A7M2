@@ -407,6 +407,10 @@ function EditorBody({ asset }: { asset: Asset }) {
               resetParams(asset.id, GROUP_PARAMS[group]);
               commitHistory();
             }}
+            onResetParam={(key) => {
+              resetParams(asset.id, [key]);
+              commitHistory();
+            }}
           />
         ) : null}
 
@@ -472,6 +476,7 @@ function AdjustPanel({
   patchParam,
   onCommit,
   onResetGroup,
+  onResetParam,
 }: {
   params: EditParams;
   group: (typeof GROUPS)[number]['key'];
@@ -479,6 +484,7 @@ function AdjustPanel({
   patchParam: (key: ParamKey, value: number) => void;
   onCommit: () => void;
   onResetGroup: () => void;
+  onResetParam: (key: ParamKey) => void;
 }) {
   return (
     <View style={{ flex: 1, marginTop: space.md }}>
@@ -502,6 +508,7 @@ function AdjustPanel({
             step={PARAM_META[key].step}
             onChange={(v) => patchParam(key, v)}
             onCommit={onCommit}
+            onReset={() => onResetParam(key)}
           />
         ))}
         <T variant="monoMuted" style={{ marginTop: space.sm }}>
