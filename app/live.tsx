@@ -86,6 +86,21 @@ export default function LiveScreen() {
           </View>
         )}
 
+        {camera.mode === 'usb' && camera.error ? (
+          // 真机联机失败时把原因和下一步直接摆在画面上：用户在这一页最需要知道「为什么没画面」
+          <View style={styles.errorLayer} pointerEvents="none">
+            <Ionicons name="alert-circle-outline" size={22} color={color.warn} />
+            <T variant="body" style={styles.errorTitle}>
+              {camera.error.message}
+            </T>
+            {(camera.error.hints ?? []).slice(0, 3).map((hint) => (
+              <T key={hint} variant="monoMuted" style={styles.errorHint}>
+                · {hint}
+              </T>
+            ))}
+          </View>
+        ) : null}
+
         {gridVisible ? (
           <View pointerEvents="none" style={StyleSheet.absoluteFill}>
             {[1, 2].map((i) => (
@@ -227,4 +242,20 @@ const styles = StyleSheet.create({
     backgroundColor: color.accent,
   },
   hintRow: { alignItems: 'center', gap: space.sm },
+  errorLayer: {
+    position: 'absolute',
+    left: space.xl,
+    right: space.xl,
+    top: '38%',
+    paddingHorizontal: space.lg,
+    paddingVertical: space.lg,
+    borderRadius: 14,
+    backgroundColor: 'rgba(12,14,16,0.9)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.hairlineStrong,
+    alignItems: 'center',
+    gap: 6,
+  },
+  errorTitle: { color: color.text, textAlign: 'center', marginTop: 2 },
+  errorHint: { textAlign: 'center' },
 });
