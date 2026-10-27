@@ -249,6 +249,19 @@ export class SonyCameraTransport implements ICameraTransport {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       eventLog.error('camera.capture.failed', { error: message });
+
+      // 机身不支持 PTP 回传：快门确实按下去了，照片在卡里。这不该报成"快门失败"。
+      if (message.includes('CAPTURE_UNSUPPORTED')) {
+        return {
+          ok: false,
+          error: {
+            code: 'E_STILL_TRANSFER_UNSUPPORTED',
+            message: '该机型不支持 USB 照片回传（快门已触发，照片在相机存储卡里）',
+            hints: ['用读卡器或相机 Wi-Fi 把照片传到手机', '远程快门与联机状态仍然可用'],
+          },
+        };
+      }
+
       return {
         ok: false,
         error: {
