@@ -498,6 +498,12 @@ internal class SonyCameraController(private val context: Context) {
       result
     } catch (error: Throwable) {
       val cause = error.cause ?: error
+      if (cause is SonyPtpException && isCaptureUnsupported(cause)) {
+        // 快门确实按下去了，只是这台机身不通过 PTP 交照片：保留会话，别把相机踢下线
+        trace("capture unsupported by this body; keeping the PTP session alive")
+        updateState("ready", cause.message?.removePrefix(SonyPtpTransport.CAPTURE_UNSUPPORTED_PREFIX)?.trim())
+        throw cause
+      }
       if (cause is SonyPtpException && cause.retryable && scalarTransport != null) {
         trace("recoverable Scalar capture failure preserved session: ${cause.message ?: "unknown"}")
         updateState("ready", "Sony rejected this capture. The camera remains connected; reframe and try again.")
@@ -593,6 +599,9 @@ internal class SonyCameraController(private val context: Context) {
     )
     usbManager.requestPermission(attached, pending)
   }
+
+  private fun isCaptureUnsupported(error: SonyPtpException): Boolean =
+    error.message?.startsWith(SonyPtpTransport.CAPTURE_UNSUPPORTED_PREFIX) == true
 
   private fun isLiveViewUnsupported(error: SonyPtpException): Boolean =
     error.message?.startsWith(LIVE_VIEW_UNSUPPORTED_PREFIX) == true
