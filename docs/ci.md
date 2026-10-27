@@ -78,6 +78,8 @@
 | Gradle OOM / 构建被杀 | Skia + Reanimated 编译吃内存 | 已设置 `-Xmx4g`；必要时拆成 `:app:assembleDebug` 单模块 |
 | `npm ci` 报 lock 不一致 | 改了 `package.json` 没更新 lock | 本地 `npm install` 后一起提交 `package-lock.json` |
 | 构建超 60 分钟 | 冷缓存 + 低配 runner | 保留 Gradle 缓存（工作流已配），或改用 self-hosted runner |
+| `hosted runner lost communication with the server` | **私有仓库的 hosted runner 只有 2 核 / 7GB 内存 / 14GB 磁盘**，RN 原生构建（Skia/reanimated/Hermes/NDK）把它打满，内核把 agent 杀掉 | 工作流已做：单 worker、关并行、关 R8、只编 arm64、构建前清理磁盘。仍不够时：把仓库改成 public（runner 升级为 4 核/16GB），或改用 larger runner / EAS Build |
+| 构建卡在 `:app:configureCMakeRelWithDebInfo` 很久 | new architecture 的 C++ codegen + Skia CMake 配置，单核跑本来就慢 | 正常现象；冷缓存约 20~40 分钟 |
 | 白屏 / 启动瞬间白底闪一下 | `userInterfaceStyle: dark` 需要 `expo-system-ui` | 已加入依赖；改了主题配置记得确认它在 `package.json` 里 |
 
 ## 版本速查（本仓库 prebuild 实际产出）
