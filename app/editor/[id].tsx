@@ -29,17 +29,21 @@ import { Lut3D } from '@/core/lut';
 import { eventLog } from '@/core/log';
 import { Button, Label, ParamRow, Segmented, T } from '@/design/ui';
 import { color, radius, space, typography } from '@/design/tokens';
+import { useThrottledCallback } from '@/design/useThrottledCallback';
 import {
+  computeHistogram,
   decodeImage,
   getGradeEffect,
   lutSkImage,
+  makePreviewImage,
   placeholderLutImage,
   uniformsObject,
+  type Histogram,
 } from '@/services/grading';
 import { exportEdited } from '@/services/exportImage';
 import { importLutFromPicker, loadLutFromPath } from '@/services/lutStore';
 import { requestGrade } from '@/services/aiClient';
-import { useAppStore } from '@/state/useAppStore';
+import { EditorSession, useAppStore } from '@/state/useAppStore';
 
 type PanelTab = 'adjust' | 'presets' | 'ai';
 
@@ -77,12 +81,19 @@ function EditorBody({ asset }: { asset: Asset }) {
   const applyPreset = useAppStore((s) => s.applyPreset);
   const setLut = useAppStore((s) => s.setLut);
   const setSessionParams = useAppStore((s) => s.setSessionParams);
+  const restoreSession = useAppStore((s) => s.restoreSession);
+  const resetParams = useAppStore((s) => s.resetParams);
   const markStatus = useAppStore((s) => s.markStatus);
   const settings = useAppStore((s) => s.settings);
   const apiKey = useAppStore((s) => s.apiKey);
   const notify = useAppStore((s) => s.notify);
 
   const params: EditParams = session?.params ?? DEFAULT_PARAMS;
+
+  // 拖动滑块时节流写 store：画面仍跟手，但重渲染次数降一个量级
+  const patchParamThrottled = useThrottledCallback((key: ParamKey, value: number) => {
+    patchParam(asset.id, key, value);
+  }, 40);
 
   const [tab, setTab] = useState<PanelTab>('adjust');
   const [group, setGroup] = useState<(typeof GROUPS)[number]['key']>('light');
@@ -92,6 +103,13 @@ function EditorBody({ asset }: { asset: Asset }) {
   const [lut, setLutState] = useState<Lut3D | null>(null);
   const [comparing, setComparing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [histogram, setHistogram] = useState<Histogram | null>(null);
+
+  /** 撤销/重做：只在"一次操作结束"（松手、应用预设、换 LUT）时入栈 */
+  const historyRef = useRef<EditorSession[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  /** 只用于渲染按钮可用状态：ref 不能参与渲染 */
+  const [historyLength, setHistoryLength] = useState(0);
 
   const effect = getGradeEffect();
   const activeLut = session?.lutPath ? lut : null;
@@ -118,7 +136,10 @@ function EditorBody({ asset }: { asset: Asset }) {
         const decoded = decodeImage(bytes);
         if (!alive) return;
         if (!decoded) throw new Error('解码失败');
-        setImage(decoded);
+        // 预览只用降采样副本：24MP 原图整张进 GPU 纹理在低端机上会直接 OOM
+        const preview = makePreviewImage(decoded);
+        setImage(preview);
+        setHistogram(computeHistogram(preview));
         setImageError(null);
       } catch (error) {
         if (!alive) return;
@@ -159,6 +180,52 @@ function EditorBody({ asset }: { asset: Asset }) {
     [params, frame.width, frame.height, activeLut],
   );
 
+  /* ---------- 撤销 / 重做 ---------- */
+  const currentSnapshot: EditorSession = useMemo(
+    () => ({
+      params,
+      presetId: session?.presetId ?? null,
+      lutPath: session?.lutPath ?? null,
+      lutName: session?.lutName ?? null,
+    }),
+    [params, session?.presetId, session?.lutPath, session?.lutName],
+  );
+
+  const commitHistory = useCallback(() => {
+    const entries = historyRef.current.slice(0, historyIndex + 1);
+    const last = entries[entries.length - 1];
+    if (last && JSON.stringify(last) === JSON.stringify(currentSnapshot)) return;
+    entries.push(currentSnapshot);
+    if (entries.length > 40) entries.shift();
+    historyRef.current = entries;
+    setHistoryLength(entries.length);
+    setHistoryIndex(entries.length - 1);
+  }, [currentSnapshot, historyIndex]);
+
+  const undo = useCallback(() => {
+    if (historyIndex <= 0) return;
+    const nextIndex = historyIndex - 1;
+    const target = historyRef.current[nextIndex];
+    if (!target) return;
+    setHistoryIndex(nextIndex);
+    restoreSession(asset.id, target);
+  }, [asset.id, historyIndex, restoreSession]);
+
+  const redo = useCallback(() => {
+    const target = historyRef.current[historyIndex + 1];
+    if (!target) return;
+    setHistoryIndex(historyIndex + 1);
+    restoreSession(asset.id, target);
+  }, [asset.id, historyIndex, restoreSession]);
+
+  // 首次进入把当前状态作为历史第 0 项
+  useEffect(() => {
+    if (historyRef.current.length > 0) return;
+    historyRef.current = [currentSnapshot];
+    setHistoryLength(1);
+    setHistoryIndex(0);
+  }, [currentSnapshot]);
+
   /* ---------- 保存 / 导出 ---------- */
   const handleSave = useCallback(
     async (toGallery: boolean) => {
@@ -176,10 +243,11 @@ function EditorBody({ asset }: { asset: Asset }) {
         markStatus(asset.id, toGallery && result.savedToGallery ? 'exported' : 'edited');
 
         const size = formatBytes(result.bytes);
+        const suffix = result.mode === 'original' ? '，原图直出未重编码' : '';
         if (!toGallery) {
-          notify('ok', `已保存：${result.fileName}（${size}）`);
+          notify('ok', `已保存：${result.fileName}（${size}${suffix}）`);
         } else if (result.savedToGallery) {
-          notify('ok', `已保存并写入相册：${result.fileName}（${size}）`);
+          notify('ok', `已保存并写入相册：${result.fileName}（${size}${suffix}）`);
         } else {
           // 本地已保存成功、只是相册失败：必须如实说，不能让人以为存进相册了
           notify('warn', `已保存到 App 目录，但写入相册失败：${result.galleryError ?? '未知原因'}`);
@@ -229,6 +297,22 @@ function EditorBody({ asset }: { asset: Asset }) {
             {activeLut ? ` · ${session?.lutName ?? 'LUT'}` : ''}
           </T>
         </View>
+        <Pressable
+          onPress={undo}
+          disabled={historyIndex <= 0}
+          hitSlop={10}
+          style={[styles.iconBtn, historyIndex <= 0 && { opacity: 0.3 }]}
+        >
+          <Ionicons name="arrow-undo-outline" size={19} color={color.text} />
+        </Pressable>
+        <Pressable
+          onPress={redo}
+          disabled={historyIndex >= historyLength - 1}
+          hitSlop={10}
+          style={[styles.iconBtn, historyIndex >= historyLength - 1 && { opacity: 0.3 }]}
+        >
+          <Ionicons name="arrow-redo-outline" size={19} color={color.text} />
+        </Pressable>
         <Pressable
           onPress={() => void handleSave(false)}
           disabled={saving}
@@ -285,6 +369,8 @@ function EditorBody({ asset }: { asset: Asset }) {
           <Image source={{ uri: asset.uri }} style={StyleSheet.absoluteFill} contentFit="contain" />
         ) : null}
 
+        <HistogramOverlay histogram={histogram} />
+
         <Pressable
           onPressIn={() => setComparing(true)}
           onPressOut={() => setComparing(false)}
@@ -311,13 +397,26 @@ function EditorBody({ asset }: { asset: Asset }) {
         />
 
         {tab === 'adjust' ? (
-          <AdjustPanel params={params} group={group} setGroup={setGroup} patchParam={(k, v) => patchParam(asset.id, k, v)} />
+          <AdjustPanel
+            params={params}
+            group={group}
+            setGroup={setGroup}
+            patchParam={patchParamThrottled}
+            onCommit={commitHistory}
+            onResetGroup={() => {
+              resetParams(asset.id, GROUP_PARAMS[group]);
+              commitHistory();
+            }}
+          />
         ) : null}
 
         {tab === 'presets' ? (
           <PresetsPanel
             activeId={session?.presetId ?? null}
-            onApply={(presetId) => applyPreset(asset.id, presetId)}
+            onApply={(presetId) => {
+              applyPreset(asset.id, presetId);
+              commitHistory();
+            }}
             onPickLut={() => void pickLut()}
             lutName={session?.lutName ?? null}
             onClearLut={() => {
@@ -342,7 +441,10 @@ function EditorBody({ asset }: { asset: Asset }) {
         <View style={styles.actionRow}>
           <Button
             title="重置"
-            onPress={() => resetSession(asset.id)}
+            onPress={() => {
+              resetSession(asset.id);
+              commitHistory();
+            }}
             variant="ghost"
             disabled={!dirty && !activeLut}
             style={{ flex: 1 }}
@@ -368,16 +470,28 @@ function AdjustPanel({
   group,
   setGroup,
   patchParam,
+  onCommit,
+  onResetGroup,
 }: {
   params: EditParams;
   group: (typeof GROUPS)[number]['key'];
   setGroup: (g: (typeof GROUPS)[number]['key']) => void;
   patchParam: (key: ParamKey, value: number) => void;
+  onCommit: () => void;
+  onResetGroup: () => void;
 }) {
   return (
     <View style={{ flex: 1, marginTop: space.md }}>
       <Segmented value={group} onChange={(v) => setGroup(v as typeof group)} options={GROUPS.map((g) => ({ value: g.key, label: g.label }))} />
-      <ScrollView style={{ flex: 1, marginTop: space.sm }} showsVerticalScrollIndicator={false}>
+      <View style={styles.groupBar}>
+        <T variant="monoMuted">{GROUP_PARAMS[group].length} 项</T>
+        <Pressable onPress={onResetGroup} hitSlop={8}>
+          <T variant="monoMuted" style={{ color: color.textMuted }}>
+            重置本组
+          </T>
+        </Pressable>
+      </View>
+      <ScrollView style={{ flex: 1, marginTop: space.xs }} showsVerticalScrollIndicator={false}>
         {GROUP_PARAMS[group].map((key) => (
           <ParamRow
             key={key}
@@ -387,6 +501,7 @@ function AdjustPanel({
             max={PARAM_META[key].max}
             step={PARAM_META[key].step}
             onChange={(v) => patchParam(key, v)}
+            onCommit={onCommit}
           />
         ))}
         <T variant="monoMuted" style={{ marginTop: space.sm }}>
@@ -572,7 +687,40 @@ function AiPanel({
   );
 }
 
+function HistogramOverlay({ histogram }: { histogram: Histogram | null }) {
+  if (!histogram || histogram.sampled === 0) return null;
+  return (
+    <View style={styles.histogram} pointerEvents="none">
+      {histogram.luma.map((value, index) => (
+        <View
+          key={index}
+          style={[
+            styles.histogramBar,
+            { height: Math.max(1, value * 30), opacity: 0.22 + value * 0.6 },
+          ]}
+        />
+      ))}
+    </View>
+  );
+}
 const styles = StyleSheet.create({
+  histogram: {
+    position: 'absolute',
+    left: space.md,
+    bottom: space.md,
+    width: 96,
+    height: 32,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    opacity: 0.85,
+  },
+  histogramBar: { flex: 1, backgroundColor: color.text, borderRadius: 0.5 },
+  groupBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: space.sm,
+  },
   root: { flex: 1, backgroundColor: color.bg },
   missing: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: color.bg },
   topBar: {

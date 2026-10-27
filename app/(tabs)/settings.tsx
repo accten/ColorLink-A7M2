@@ -7,7 +7,7 @@ import { eventLog } from '@/core/log';
 import { Button, Card, Hairline, Label, Row, Screen, Segmented, Sheet, T } from '@/design/ui';
 import { color, radius, space, typography } from '@/design/tokens';
 import { logFile, writeTextAtomic } from '@/services/paths';
-import { maskKey } from '@/services/settings';
+import { EXPORT_QUALITY_OPTIONS, EXPORT_SIZE_OPTIONS, exportQualityLabel, exportSizeLabel, maskKey } from '@/services/settings';
 import { isUsbTransportAvailable } from '@/services/camera/usb';
 import { useAppStore } from '@/state/useAppStore';
 
@@ -116,16 +116,15 @@ export default function SettingsScreen() {
           </T>
           <Segmented
             value={String(settings.exportLongEdge)}
-            options={[
-              { value: '2048', label: '2048' },
-              { value: '3000', label: '3000' },
-              { value: '4000', label: '4000' },
-              { value: '6000', label: '6000' },
-            ]}
+            options={EXPORT_SIZE_OPTIONS.map((value) => ({
+              value: String(value),
+              label: exportSizeLabel(value),
+            }))}
             onChange={(v) => void updateSettings({ exportLongEdge: Number(v) })}
           />
           <T variant="monoMuted" style={{ marginTop: space.sm }}>
-            6000 会还原 A7M2 全部 24MP；显存不足时容易 OOM，默认 4000 更稳。
+            原图 = 按原图像素 1:1 导出（不缩放）；6000 会还原 A7M2 全部 24MP。
+            显存不足时容易 OOM，默认 4000 更稳。
           </T>
 
           <Hairline />
@@ -135,13 +134,16 @@ export default function SettingsScreen() {
           </T>
           <Segmented
             value={String(settings.jpegQuality)}
-            options={[
-              { value: '80', label: '80' },
-              { value: '90', label: '90' },
-              { value: '95', label: '95' },
-            ]}
+            options={EXPORT_QUALITY_OPTIONS.map((value) => ({
+              value: String(value),
+              label: exportQualityLabel(value),
+            }))}
             onChange={(v) => void updateSettings({ jpegQuality: Number(v) })}
           />
+          <T variant="monoMuted" style={{ marginTop: space.sm }}>
+            100 是 JPEG 最高质量。没做任何调色时选「原图尺寸 + 100」会直接复制原图字节，
+            不重新编码。
+          </T>
         </Card>
       </View>
 

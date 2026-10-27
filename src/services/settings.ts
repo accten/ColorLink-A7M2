@@ -1,5 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 
+import { normalizeLongEdge } from '@/core/exportOptions';
 import { readTextSafe, settingsFile, writeTextAtomic } from './paths';
 
 /**
@@ -10,6 +11,7 @@ import { readTextSafe, settingsFile, writeTextAtomic } from './paths';
 const KEY_STORE_ID = 'colorlink.deepseek.apiKey';
 
 export interface Settings {
+  /** 导出长边；**0 = 保持原图尺寸**（不缩放） */
   exportLongEdge: number;
   jpegQuality: number;
   haptics: boolean;
@@ -25,7 +27,13 @@ export const DEFAULT_SETTINGS: Settings = {
   showGrid: false,
 };
 
-export const EXPORT_SIZE_OPTIONS = [2048, 3000, 4000, 6000];
+export {
+  EXPORT_QUALITY_OPTIONS,
+  EXPORT_SIZE_OPTIONS,
+  exportQualityLabel,
+  exportSizeLabel,
+  normalizeLongEdge,
+} from '@/core/exportOptions';
 
 export async function loadSettings(): Promise<Settings> {
   const raw = readTextSafe(settingsFile);
@@ -35,7 +43,8 @@ export async function loadSettings(): Promise<Settings> {
     return {
       ...DEFAULT_SETTINGS,
       ...parsed,
-      exportLongEdge: clampNumber(parsed.exportLongEdge, 1024, 8192, DEFAULT_SETTINGS.exportLongEdge),
+      // 0 是合法值（原图尺寸），其余按 1024..8192 收敛
+      exportLongEdge: normalizeLongEdge(parsed.exportLongEdge),
       jpegQuality: clampNumber(parsed.jpegQuality, 60, 100, DEFAULT_SETTINGS.jpegQuality),
     };
   } catch {
@@ -46,6 +55,7 @@ export async function loadSettings(): Promise<Settings> {
 export async function saveSettings(settings: Settings): Promise<void> {
   await writeTextAtomic(settingsFile, JSON.stringify(settings, null, 2));
 }
+
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
   const num = typeof value === 'number' ? value : Number(value);

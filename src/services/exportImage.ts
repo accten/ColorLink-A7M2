@@ -3,7 +3,7 @@ import { Asset as MediaAsset, requestPermissionsAsync } from 'expo-media-library
 
 import { Asset, exportFileName, uniqueFileName } from '@/core/asset';
 import { Lut3D } from '@/core/lut';
-import { EditParams } from '@/core/params';
+import { EditParams, isNeutral } from '@/core/params';
 import { eventLog } from '@/core/log';
 
 import { decodeImage, fitWithin, renderGradedJpeg } from './grading';
@@ -22,12 +22,15 @@ export interface ExportResult {
   savedToGallery: boolean;
   /** 写入相册失败时的原因（本地文件仍然已保存） */
   galleryError: string | null;
+  /** 原图直出（没有调色，直接把原字节写到 edited/）还是走了调色渲染 */
+  mode: 'original' | 'graded';
 }
 
 export interface ExportOptions {
   asset: Asset;
   params: EditParams;
   lut?: Lut3D | null;
+  /** 长边；0 表示保持原图尺寸 */
   longEdge?: number;
   quality?: number;
   toGallery?: boolean;
@@ -39,8 +42,13 @@ export interface ExportOptions {
  * 硬约束（对应需求 FR-07）：
  *  - 原图只读：只读它的字节，不写回；导出后重新算原图摘要并和入库值比对；
  *  - 输出另存：写到 edited/，命名 原名_edited_时间戳.jpg；
- *  - 质量 ≥90（默认 92）；
  *  - 相册导出走 MediaStore，失败不影响本地文件。
+ *
+ * 尺寸与质量：
+ *  - `longEdge === 0` → 按原图像素 1:1 导出，不缩放；
+ *  - `quality` 可到 100（原图质量）；
+ *  - 没有任何调色（参数中性且无 LUT）时**直接复制原图字节**，不重编码 ——
+ *    这就是"原图 JPEG 原样导出"，连压缩损失都不会有。
  */
 export async function exportEdited(options: ExportOptions): Promise<ExportResult> {
   const { asset, params } = options;
@@ -54,17 +62,25 @@ export async function exportEdited(options: ExportOptions): Promise<ExportResult
   const image = decodeImage(bytes);
   if (!image) throw new Error('原图解码失败（不是有效的 JPEG/PNG）');
 
-  const target = fitWithin(asset.width || image.width(), asset.height || image.height(), longEdge);
+  const sourceWidth = image.width();
+  const sourceHeight = image.height();
+  const target =
+    longEdge === 0
+      ? { width: sourceWidth, height: sourceHeight }
+      : fitWithin(sourceWidth, sourceHeight, longEdge);
 
   const started = Date.now();
-  const jpeg = renderGradedJpeg({
-    image,
-    params,
-    lut: options.lut ?? null,
-    width: target.width,
-    height: target.height,
-    quality,
-  });
+  const untouched = isNeutral(params) && !options.lut;
+  const jpeg = untouched
+    ? bytes
+    : renderGradedJpeg({
+        image,
+        params,
+        lut: options.lut ?? null,
+        width: target.width,
+        height: target.height,
+        quality,
+      });
 
   const fileName = uniqueFileName(exportFileName(asset.fileName, new Date()), (candidate) =>
     editedFile(candidate).exists,
@@ -105,9 +121,12 @@ export async function exportEdited(options: ExportOptions): Promise<ExportResult
 
   eventLog.info('export.ok', {
     fileName,
+    mode: untouched ? 'original' : 'graded',
     bytes: jpeg.length,
     width: target.width,
     height: target.height,
+    quality,
+    longEdge,
     ms: Date.now() - started,
     originalIntact,
     savedToGallery,
@@ -124,5 +143,6 @@ export async function exportEdited(options: ExportOptions): Promise<ExportResult
     originalIntact,
     savedToGallery,
     galleryError,
+    mode: untouched ? 'original' : 'graded',
   };
 }

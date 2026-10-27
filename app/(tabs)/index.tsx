@@ -169,7 +169,7 @@ export default function ConnectScreen() {
                 style={({ pressed }) => [styles.recentRow, pressed && { backgroundColor: color.surfaceHi }]}
               >
                 <Image
-                  source={{ uri: asset.uri }}
+                  source={{ uri: asset.thumbUri ?? asset.uri }}
                   style={styles.recentThumb}
                   contentFit="cover"
                   transition={120}

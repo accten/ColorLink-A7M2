@@ -15,6 +15,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 export const rootDir = new Directory(Paths.document, 'colorlink');
 export const ingestDir = new Directory(rootDir, 'ingest');
 export const editedDir = new Directory(rootDir, 'edited');
+export const thumbsDir = new Directory(rootDir, 'thumbs');
 export const lutsDir = new Directory(rootDir, 'luts');
 export const presetsDir = new Directory(rootDir, 'presets');
 export const logsDir = new Directory(rootDir, 'logs');
@@ -23,7 +24,7 @@ export const indexFile = new File(rootDir, 'index.json');
 export const settingsFile = new File(rootDir, 'settings.json');
 export const presetsFile = new File(rootDir, 'presets.json');
 
-const ALL_DIRS = [rootDir, ingestDir, editedDir, lutsDir, presetsDir, logsDir];
+const ALL_DIRS = [rootDir, ingestDir, editedDir, thumbsDir, lutsDir, presetsDir, logsDir];
 
 let prepared = false;
 
@@ -41,6 +42,11 @@ export function ensureDirs(): void {
 export function ingestFile(name: string): File {
   ensureDirs();
   return new File(ingestDir, name);
+}
+
+export function thumbFile(name: string): File {
+  ensureDirs();
+  return new File(thumbsDir, name);
 }
 
 export function editedFile(name: string): File {

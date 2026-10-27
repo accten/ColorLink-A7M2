@@ -67,7 +67,7 @@ export default function GalleryScreen() {
                 style={({ pressed }) => [styles.cell, pressed && { opacity: 0.72 }]}
               >
                 <Image
-                  source={{ uri: asset.uri }}
+                  source={{ uri: asset.thumbUri ?? asset.uri }}
                   style={styles.image}
                   contentFit="cover"
                   transition={140}

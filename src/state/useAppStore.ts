@@ -2,11 +2,12 @@ import * as Haptics from 'expo-haptics';
 import { create } from 'zustand';
 
 import { Asset, isDuplicateCapture } from '@/core/asset';
-import { EditParams, DEFAULT_PARAMS, withParam } from '@/core/params';
+import { EditParams, DEFAULT_PARAMS, ParamKey, withParam } from '@/core/params';
 import { BUILTIN_PRESETS, Preset } from '@/core/presets';
 import { eventLog } from '@/core/log';
 import { CameraMode, CameraSnapshot, CapturedPhoto, ICameraTransport, IDLE_SNAPSHOT } from '@/services/camera/types';
 import { DemoCameraTransport } from '@/services/camera/demo';
+import { backfillThumbnails, ensureThumbnail } from '@/services/thumbs';
 import { createUsbTransport } from '@/services/camera/usb';
 import { assetFromPhoto, deleteAssetFile, loadAssets, saveAssets, seedDemoAssets } from '@/services/library';
 import {
@@ -64,6 +65,10 @@ interface AppState {
   applyPreset: (assetId: string, presetId: string) => void;
   setSessionParams: (assetId: string, params: EditParams) => void;
   setLut: (assetId: string, lut: { path: string; name: string } | null) => void;
+  /** 撤销/重做用：整份会话快照回填 */
+  restoreSession: (assetId: string, snapshot: EditorSession) => void;
+  /** 只重置某一组参数（人像修图时最常用的粒度） */
+  resetParams: (assetId: string, keys: readonly ParamKey[]) => void;
   markStatus: (assetId: string, status: Asset['status']) => void;
   notify: (tone: NoticeTone, text: string, action?: Notice['action']) => void;
   dismissNotice: () => void;
@@ -117,6 +122,18 @@ export const useAppStore = create<AppState>((set, get) => {
     persist(next);
     haptic('success');
     eventLog.info('ingest.ok', { fileName: asset.fileName, bytes: asset.bytes, mode });
+
+    // 缩略图在后台补：不阻塞入库，也不影响快门手感
+    void ensureThumbnail(asset).then((thumbUri) => {
+      if (!thumbUri) return;
+      const current = get().assets;
+      if (!current.some((item) => item.id === asset.id)) return;
+      const withThumb = current.map((item) =>
+        item.id === asset.id ? { ...item, thumbUri } : item,
+      );
+      set({ assets: withThumb });
+      persist(withThumb);
+    });
   };
 
   const attach = async (mode: CameraMode) => {
@@ -191,6 +208,15 @@ export const useAppStore = create<AppState>((set, get) => {
         }
         set({ assets, libraryBusy: false });
         eventLog.info('app.ready', { assets: assets.length, demo: settings.demoMode });
+
+        // 冷启动补一批缩略图（只补前几张，别抢首屏时间）
+        void backfillThumbnails(assets, 6).then((patched) => {
+          if (patched === assets) return;
+          set({ assets: patched });
+          void saveAssets(patched).catch((error) =>
+            eventLog.error('library.save.failed', { error: String(error) }),
+          );
+        });
 
         if (settings.demoMode) {
           await attach('demo');
@@ -343,6 +369,22 @@ export const useAppStore = create<AppState>((set, get) => {
           [assetId]: { ...current, lutPath: lut?.path ?? null, lutName: lut?.name ?? null },
         },
       });
+    },
+
+    restoreSession: (assetId, snapshot) => {
+      const state = get();
+      set({ sessions: { ...state.sessions, [assetId]: { ...snapshot } } });
+    },
+
+    resetParams: (assetId, keys) => {
+      const state = get();
+      const current = state.sessions[assetId] ?? defaultSession();
+      let params = current.params;
+      for (const key of keys) params = withParam(params, key, DEFAULT_PARAMS[key]);
+      set({
+        sessions: { ...state.sessions, [assetId]: { ...current, params, presetId: null } },
+      });
+      haptic('light');
     },
 
     markStatus: (assetId, status) => {
