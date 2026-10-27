@@ -20,6 +20,8 @@ export interface ExportResult {
   /** 导出后重新校验原图摘要：必须和入库时一致（FR-07 / TC-10） */
   originalIntact: boolean;
   savedToGallery: boolean;
+  /** 写入相册失败时的原因（本地文件仍然已保存） */
+  galleryError: string | null;
 }
 
 export interface ExportOptions {
@@ -76,15 +78,28 @@ export async function exportEdited(options: ExportOptions): Promise<ExportResult
   const originalIntact = !originalHash || !asset.originalHash || originalHash === asset.originalHash;
 
   let savedToGallery = false;
+  let galleryError: string | null = null;
+
   if (options.toGallery) {
+    // 先直接写：Android 10+ 走 MediaStore 本来就不需要读权限，
+    // 只有真正被拒时才申请/提示。之前"先 requestPermission 再写"的写法在
+    // Android 17 上会直接拿到 denied，于是静默跳过，用户以为存进相册了。
     try {
-      const permission = await requestPermissionsAsync(true);
-      if (permission.granted) {
+      await saveToLibraryAsync(output.uri);
+      savedToGallery = true;
+    } catch (directError) {
+      try {
+        const permission = await requestPermissionsAsync(true);
+        if (!permission.granted) throw new Error('相册权限被拒绝');
         await saveToLibraryAsync(output.uri);
         savedToGallery = true;
+      } catch (error) {
+        galleryError = error instanceof Error ? error.message : String(error);
+        eventLog.warn('export.gallery.failed', {
+          direct: String(directError),
+          reason: galleryError,
+        });
       }
-    } catch (error) {
-      eventLog.warn('export.gallery.failed', { error: String(error) });
     }
   }
 
@@ -96,6 +111,7 @@ export async function exportEdited(options: ExportOptions): Promise<ExportResult
     ms: Date.now() - started,
     originalIntact,
     savedToGallery,
+    galleryError,
   });
 
   return {
@@ -107,5 +123,6 @@ export async function exportEdited(options: ExportOptions): Promise<ExportResult
     outputHash,
     originalIntact,
     savedToGallery,
+    galleryError,
   };
 }

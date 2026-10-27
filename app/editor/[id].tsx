@@ -174,12 +174,17 @@ function EditorBody({ asset }: { asset: Asset }) {
           toGallery,
         });
         markStatus(asset.id, toGallery && result.savedToGallery ? 'exported' : 'edited');
-        notify(
-          'ok',
-          `${toGallery && result.savedToGallery ? '已保存并写入相册' : '已保存'}：${result.fileName}（${formatBytes(
-            result.bytes,
-          )}）`,
-        );
+
+        const size = formatBytes(result.bytes);
+        if (!toGallery) {
+          notify('ok', `已保存：${result.fileName}（${size}）`);
+        } else if (result.savedToGallery) {
+          notify('ok', `已保存并写入相册：${result.fileName}（${size}）`);
+        } else {
+          // 本地已保存成功、只是相册失败：必须如实说，不能让人以为存进相册了
+          notify('warn', `已保存到 App 目录，但写入相册失败：${result.galleryError ?? '未知原因'}`);
+        }
+
         if (!result.originalIntact) {
           notify('warn', '原图摘要发生变化（不应发生），已记录日志，请导出日志反馈');
           eventLog.error('export.original.changed', { assetId: asset.id });

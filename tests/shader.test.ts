@@ -42,15 +42,25 @@ describe('SKSL uniform 契约', () => {
 });
 
 describe('LUT 采样与打包布局同步', () => {
-  it('shader 用像素坐标取样（不是 0..1）', () => {
-    expect(GRADE_SKSL).toContain('lut.eval(px)');
-    expect(GRADE_SKSL).toContain('float2 px = float2(rg.x + 0.5, bb * n + rg.y + 0.5)');
+  it('shader 用像素坐标取样（不是 0..1），且带 +0.5 半像素对齐', () => {
+    expect(GRADE_SKSL).toContain('lut.eval(float2(i0.x + 0.5, py))');
+    expect(GRADE_SKSL).toContain('lut.eval(float2(i1.x + 0.5, py))');
   });
 
   it('蓝色轴决定行块，与 packLut 的 y = b*n + g 一致', () => {
-    expect(GRADE_SKSL).toMatch(/bb \* n \+ rg\.y/);
-    // 采样坐标要落在行块内，所以分母是 n*n
-    expect(GRADE_SKSL).not.toMatch(/bb \* n \+ rg\.y[\s\S]{0,40}\/ \(n\)/);
+    expect(GRADE_SKSL).toMatch(/rowBase = bz \* n \+ 0\.5/);
+    expect(GRADE_SKSL).toContain('py = rowBase + gy');
+    // 采样坐标要落在行块内，不能再除以 n
+    expect(GRADE_SKSL).not.toMatch(/rowBase[\s\S]{0,40}\/ \(n\)/);
+  });
+
+  it('是三线性插值（8 点），不是只插蓝轴', () => {
+    // 两层 z × 两层 y，每层里 r 方向取两个点插值
+    expect(GRADE_SKSL).toMatch(/for \(int z = 0; z < 2; z\+\+\)/);
+    expect(GRADE_SKSL).toMatch(/for \(int y = 0; y < 2; y\+\+\)/);
+    expect(GRADE_SKSL).toMatch(/mix\(s0, s1, half\(t\.x\)\)/);
+    expect(GRADE_SKSL).toMatch(/\* half\(wy\)/);
+    expect(GRADE_SKSL).toMatch(/\* half\(wz\)/);
   });
 
   it('LUT 浓度可调，且按 0..100 归一', () => {

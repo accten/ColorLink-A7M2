@@ -39,22 +39,34 @@ half3 toLinear(half3 c) { return pow(max(c, 0.0), half3(2.2)); }
 half3 toSrgb(half3 c) { return pow(max(c, 0.0), half3(1.0 / 2.2)); }
 half luma(half3 c) { return dot(c, LUMA); }
 
+// 3D LUT：8 点三线性插值。
+// 之前只对蓝轴插值、r/g 直接取最近邻，17³ 的 LUT 会把连续色阶量化成 17 级，
+// 真机上表现为一圈圈同心色带。LUT 纹理必须用 nearest 取"准确的网格点"，
+// 但网格之间的插值必须自己做。
 half3 sampleLut(half3 c) {
   float n = max(lutSize, 2.0);
-  float b = clamp(c.b, 0.0, 1.0) * (n - 1.0);
-  float b0 = floor(b);
-  float b1 = min(b0 + 1.0, n - 1.0);
-  float bf = b - b0;
+  float3 f = float3(clamp(c, 0.0, 1.0)) * (n - 1.0);
+  float3 i0 = floor(f);
+  float3 i1 = min(i0 + 1.0, n - 1.0);
+  float3 t = f - i0;
 
-  float2 rg = clamp(c.rg, 0.0, 1.0) * (n - 1.0);
   half3 acc = half3(0.0);
+  for (int z = 0; z < 2; z++) {
+    float bz = (z == 0) ? i0.z : i1.z;
+    float wz = (z == 0) ? (1.0 - t.z) : t.z;
+    float rowBase = bz * n + 0.5;
 
-  // 蓝轴两片之间插值；r/g 精确落在网格点上（纹理由 nearest 采样保证）
-  for (int i = 0; i < 2; i++) {
-    float bb = (i == 0) ? b0 : b1;
-    float w = (i == 0) ? (1.0 - bf) : bf;
-    float2 px = float2(rg.x + 0.5, bb * n + rg.y + 0.5);
-    acc += half3(lut.eval(px).rgb) * half(w);
+    half3 slice = half3(0.0);
+    for (int y = 0; y < 2; y++) {
+      float gy = (y == 0) ? i0.y : i1.y;
+      float wy = (y == 0) ? (1.0 - t.y) : t.y;
+      float py = rowBase + gy;
+
+      half3 s0 = half3(lut.eval(float2(i0.x + 0.5, py)).rgb);
+      half3 s1 = half3(lut.eval(float2(i1.x + 0.5, py)).rgb);
+      slice += mix(s0, s1, half(t.x)) * half(wy);
+    }
+    acc += slice * half(wz);
   }
   return acc;
 }

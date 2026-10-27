@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -352,8 +352,11 @@ export function Segmented<T extends string>({
 }
 
 /**
- * 自绘滑块：不依赖 gesture-handler，PanResponder + locationX 足够稳。
- * 拖动中只回调 onChange（用于实时预览），松手回调 onCommit（用于落库/记录）。
+ * 自绘滑块：PanResponder + 绝对坐标（pageX）。
+ *
+ * 用 pageX 而不是 locationX：locationX 是相对"被按到的那个子视图"算的，
+ * 手指按在圆点上时坐标是相对圆点的 —— 真机表现就是"一碰圆点数值直接跳到最左/最右"。
+ * 轨道的位置与宽度通过 onLayout + measureInWindow 记录，换算成绝对坐标后再算取值。
  */
 export function Slider({
   value,
@@ -374,8 +377,14 @@ export function Slider({
   disabled?: boolean;
   tint?: string;
 }) {
-  // 轨道宽度放在 state 里（onLayout 写入），避免"渲染期读写 ref"的隐患
-  const [trackWidth, setTrackWidth] = useState(1);
+  const trackRef = useRef<React.ComponentRef<typeof View>>(null);
+  const [track, setTrack] = useState({ x: 0, width: 1 });
+
+  const measureTrack = useCallback(() => {
+    trackRef.current?.measureInWindow((x, _y, width) => {
+      setTrack({ x, width: Math.max(1, width) });
+    });
+  }, []);
 
   const clampToStep = useCallback(
     (raw: number) => {
@@ -386,9 +395,12 @@ export function Slider({
     [min, max, step],
   );
 
-  const fromX = useCallback(
-    (x: number) => clampToStep(min + (Math.min(1, Math.max(0, x / trackWidth)) * (max - min))),
-    [clampToStep, min, max, trackWidth],
+  const fromPageX = useCallback(
+    (pageX: number) => {
+      const ratio = Math.min(1, Math.max(0, (pageX - track.x) / track.width));
+      return clampToStep(min + ratio * (max - min));
+    },
+    [clampToStep, min, max, track.x, track.width],
   );
 
   const responder = useMemo(
@@ -396,12 +408,12 @@ export function Slider({
       PanResponder.create({
         onStartShouldSetPanResponder: () => !disabled,
         onMoveShouldSetPanResponder: () => !disabled,
-        onPanResponderGrant: (e) => onChange(fromX(e.nativeEvent.locationX)),
-        onPanResponderMove: (e) => onChange(fromX(e.nativeEvent.locationX)),
-        onPanResponderRelease: (e) => onCommit?.(fromX(e.nativeEvent.locationX)),
-        onPanResponderTerminate: (e) => onCommit?.(fromX(e.nativeEvent.locationX)),
+        onPanResponderGrant: (e) => onChange(fromPageX(e.nativeEvent.pageX)),
+        onPanResponderMove: (e) => onChange(fromPageX(e.nativeEvent.pageX)),
+        onPanResponderRelease: (e) => onCommit?.(fromPageX(e.nativeEvent.pageX)),
+        onPanResponderTerminate: (e) => onCommit?.(fromPageX(e.nativeEvent.pageX)),
       }),
-    [disabled, fromX, onChange, onCommit],
+    [disabled, fromPageX, onChange, onCommit],
   );
 
   const pct = max === min ? 0 : Math.min(1, Math.max(0, (value - min) / (max - min)));
@@ -410,8 +422,9 @@ export function Slider({
 
   return (
     <View
+      ref={trackRef}
       style={{ height: 34, justifyContent: 'center', opacity: disabled ? 0.4 : 1 }}
-      onLayout={(e) => setTrackWidth(Math.max(1, e.nativeEvent.layout.width))}
+      onLayout={measureTrack}
       {...responder.panHandlers}
     >
       <View style={styles.track}>
