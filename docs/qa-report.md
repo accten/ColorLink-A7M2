@@ -34,6 +34,7 @@
 | D3 | 套 LUT 后出现同心色带 | 只对蓝轴插值，r/g 用最近邻 → 17³ 量化成 17 级 | 8 点三线性插值（纹理仍 nearest） |
 | D4 | 「保存到相册」静默失败，提示仍说"已保存" | 先 `requestPermissionsAsync` 在 Android 17 拿 denied 就跳过 | 直接写 MediaStore，失败再申请，并把原因如实显示 |
 | D5 | 相册仍写不进去 | `saveToLibraryAsync` 在 SDK 58 已废弃、调用即抛错 | 改用新 API `Asset.create(uri)` |
+| D6 | 连按快门 5 次，图库一张都没多 | 演示拍到的像素与种子图相同 → SHA-256 相同 → 被去重逻辑丢掉（日志 `ingest.duplicate` 连刷） | 去重只作用于真机传输；演示模式每次快门算新照片（`isDuplicateCapture(mode, …)`，含单测） |
 
 > 另外把可观测性补上了：事件日志现在显示 data（错误原因），`console` 同步到 logcat；
 > 否则 D1 只能看到 `library.seed.failed` 这一个词，根本定位不到 URI 问题。
