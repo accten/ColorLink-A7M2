@@ -43,8 +43,14 @@ internal class SonyPtpTransport private constructor(
     private const val PARTIAL_TRANSFER_THRESHOLD_BYTES = 8L * 1024 * 1024
     private const val PARTIAL_TRANSFER_CHUNK_BYTES = 4 * 1024 * 1024
 
-    /** 没有 D215 的机身：试读虚拟回传句柄的最小间隔，别把 USB 打满 */
-    private const val CAPTURE_PROBE_INTERVAL_MS = 400L
+    /** 没有 D215 的机身：等相机把这一张写完再读虚拟回传句柄（24MP JPEG 约 2~3s） */
+    private const val CAPTURE_SETTLE_BEFORE_READ_MS = 2_800L
+
+    /** 两次试读之间的间隔：太密会把 A7M2 的 PTP 打僵 */
+    private const val CAPTURE_PROBE_INTERVAL_MS = 1_200L
+
+    /** 等待+试读总共试几次就认命（约 2.8s + 4×1.2s） */
+    private const val MAX_CAPTURE_PROBE_ATTEMPTS = 4
 
     /** PTP 的 SessionAlreadyOpened：上一次会话没正常收尾时，机体就会回这个 */
     private const val RESPONSE_SESSION_ALREADY_OPEN = 0x201E
@@ -105,9 +111,12 @@ internal class SonyPtpTransport private constructor(
   private var loggedMissingD215 = false
   private var lastCaptureProbeAt = 0L
 
-  /** 对象列表兜底用的存储/基线（只有机身声明支持 GetObjectHandles 时才会填） */
-  private var captureStorageId: Int? = null
-  private var captureBaselineHandles: Set<Int>? = null
+  /** 快门按下时刻：没有 D215 的机身要等相机写完卡再读回传句柄 */
+  private var captureStartedAt = 0L
+  private var loggedSettleWait = false
+
+  /** 已经试读了几次回传句柄：够了就认命，别让用户干等 35 秒 */
+  private var captureProbeAttempts = 0
 
   /** Populated during [authenticate]; null when the camera refused `GetDeviceInfo`. */
   var deviceInfo: SonyDeviceInfo? = null
@@ -183,63 +192,6 @@ internal class SonyPtpTransport private constructor(
       trace("Sony device properties=${properties.size} sony=${sonyCodes.joinToString(",") { it.hex() }}")
     }
     return properties
-  }
-
-  /**
-   * 标准 PTP 的对象列表。
-   *
-   * 实测 ILCE-7M2 在 PC 遥控模式下用 storageId=-1 调 `GetObjectHandles(0x1007)` 会让整条
-   * USB 管线静默，所以这里**必须先拿到真实 storageId**（`0x1004 GetStorageIDs`），
-   * 而且只在机身自己声明支持 0x1007 时才走这条路。
-   */
-  private fun storageIds(): IntArray {
-    val result = execute(0x1004, expectsData = true, allowBusy = true)
-    val data = result.data ?: return intArrayOf()
-    if (data.size < 4) return intArrayOf()
-    val count = data.u32(0).toInt()
-    return IntArray(maxOf(count, 0)) { index ->
-      val offset = 4 + index * 4
-      if (offset + 4 <= data.size) data.u32(offset).toInt() else 0
-    }.filter { it != 0 }.toIntArray()
-  }
-
-  private fun objectHandles(storageId: Int): Set<Int> {
-    val result = execute(0x1007, intArrayOf(storageId, 0, 0), expectsData = true, allowBusy = true)
-    val data = result.data ?: return emptySet()
-    if (data.size < 4) return emptySet()
-    val count = data.u32(0).toInt()
-    val handles = LinkedHashSet<Int>(maxOf(count, 0))
-    for (index in 0 until count) {
-      val offset = 4 + index * 4
-      if (offset + 4 > data.size) break
-      handles.add(data.u32(offset).toInt())
-    }
-    return handles
-  }
-
-  /**
-   * 按下快门前记一份对象列表基线。
-   *
-   * 只在机身声明支持 `GetObjectHandles` 时才做；ILCE-7M2 的 DeviceInfo 里没有它，
-   * 硬调会把 USB 打成静默（实测），所以这里必须先看能力位。
-   */
-  private fun primeObjectHandles() {
-    captureStorageId = null
-    captureBaselineHandles = null
-    if (deviceInfo?.supportsOperation(0x1007) != true) {
-      trace("capture: body does not advertise GetObjectHandles; skipping object-list baseline")
-      return
-    }
-    val storage = runCatching { storageIds().firstOrNull() }.getOrNull()
-    if (storage == null) {
-      trace("capture: no storage id available; skipping object-list baseline")
-      return
-    }
-    captureStorageId = storage
-    captureBaselineHandles = runCatching { objectHandles(storage) }
-      .onSuccess { trace("capture baseline storage=$storage handles=${it.size}") }
-      .onFailure { trace("capture baseline failed: ${it.message ?: it::class.java.simpleName}") }
-      .getOrNull()
   }
 
   /** Sony 自有的虚拟取景句柄；有的机身在 D221 缺失时依然能读。 */
@@ -323,7 +275,9 @@ internal class SonyPtpTransport private constructor(
 
   fun captureStill() {
     capturedObjectConsumed = false
-    primeObjectHandles()
+    captureProbeAttempts = 0
+    loggedSettleWait = false
+    captureStartedAt = SystemClock.elapsedRealtime()
     setButton(0xD2C1, true)
     SystemClock.sleep(90)
     setButton(0xD2C2, true)
@@ -377,38 +331,39 @@ internal class SonyPtpTransport private constructor(
       return jpeg
     }
 
-    // 没有 D215：如果机身支持对象列表（并且我们已经拿到基线与真实 storageId），
-    // 就用标准 PTP 的差集认出这一张。ILCE-7M2 不支持 0x1007，这条路会自动跳过。
-    val storage = captureStorageId
-    val baseline = captureBaselineHandles
-    if (storage != null && baseline != null) {
-      val now = SystemClock.elapsedRealtime()
-      if (now - lastCaptureProbeAt < CAPTURE_PROBE_INTERVAL_MS) return null
-      lastCaptureProbeAt = now
-      val current = runCatching { objectHandles(storage) }.getOrNull() ?: return null
-      val fresh = current - baseline
-      if (fresh.isEmpty()) return null
-      val handle = fresh.max()
-      trace("captured object via GetObjectHandles handle=0x%04X fresh=${fresh.size}".format(handle))
-      val jpeg = readCapturedObject(handle) ?: return null
-      captureBaselineHandles = current - handle
+    // 没有 D215 的机身（实测 ILCE-7M2，DeviceInfo 里 properties=0）：
+    //   1) 绝不能调 GetObjectHandles —— 它虽然被声明支持，但会静默挂死整条 USB；
+    //   2) 也不能刚按完快门就去读虚拟句柄 —— 相机还在写卡，固件会卡住不回包。
+    // 所以先等相机把这张写完，再按固定间隔试读 Sony 的虚拟回传句柄。
+    val waited = SystemClock.elapsedRealtime() - captureStartedAt
+    if (waited < CAPTURE_SETTLE_BEFORE_READ_MS) {
+      if (!loggedSettleWait) {
+        loggedSettleWait = true
+        trace("capture: waiting ${CAPTURE_SETTLE_BEFORE_READ_MS}ms before reading the capture handle")
+      }
+    val jpeg = readCapturedObject(HANDLE_CAPTURED_IMAGE)
+    }
+    val now = SystemClock.elapsedRealtime()
+    if (now - lastCaptureProbeAt < CAPTURE_PROBE_INTERVAL_MS) return null
+    lastCaptureProbeAt = now
+    if (!loggedMissingD215) {
+      loggedMissingD215 = true
+      trace("D215 missing on this body; probing the Sony capture handle")
+    }
+    val jpeg = readCapturedObject(HANDLE_CAPTURED_IMAGE)
+    if (jpeg != null) {
       capturedObjectConsumed = true
       return jpeg
     }
-
-    if (!loggedMissingD215) {
-      loggedMissingD215 = true
-      trace(
-        "no D215 and no object-list support on this body; " +
-          "PTP still transfer is not available (capture stays on the camera card)",
+    captureProbeAttempts += 1
+    if (captureProbeAttempts >= MAX_CAPTURE_PROBE_ATTEMPTS) {
+      // 等也等过了、试也试够了：这台机身就是不在 PTP 里交照片，说清楚，别让用户干等 35 秒。
+      throw SonyPtpException(
+        "$CAPTURE_UNSUPPORTED_PREFIX the shutter fired, but this body does not hand the image back " +
+          "over PTP after $captureProbeAttempts attempts. The photo stays on the camera card.",
       )
     }
-    // 属性里没有 D215、机身又不声明 GetObjectHandles：这台机身在 USB/PTP 下拿不到照片。
-    // 立即失败并说清楚，不要让用户干等 35 秒。
-    throw SonyPtpException(
-      "$CAPTURE_UNSUPPORTED_PREFIX the shutter fired, but this body does not expose the captured " +
-        "image over PTP (no D215, no GetObjectHandles in DeviceInfo). The photo stays on the camera card.",
-    )
+    return null
   }
 
   /**
