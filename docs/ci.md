@@ -5,15 +5,15 @@
 | 文件 | 触发 | 作用 |
 |---|---|---|
 | `.github/workflows/ci.yml` | push / PR | 15 分钟内跑完 typecheck + lint + 单测，给最快反馈 |
-| `.github/workflows/android-apk.yml` | push 到 `main` / 手动 `Run workflow` | 完整原生构建，产出 **debug APK** artifact |
+| `.github/workflows/android-apk.yml` | push 到 `main` / 手动 `Run workflow` | 完整原生构建，产出 **自包含 release APK** artifact |
 
 ## 取 APK
 
-`Actions → Android APK → 最新 Run → 底部 Artifacts → colorlink-debug-apk.zip → 解压得到 app-debug.apk`
+`Actions → Android APK → 最新 Run → 底部 Artifacts → colorlink-apk.zip → 解压得到 app-release.apk`
 
-> Artifact 下载需要登录 GitHub；命令行可以 `gh run download <run-id> -n colorlink-debug-apk`。
+> Artifact 下载需要登录 GitHub；命令行可以 `gh run download <run-id> -n colorlink-apk`。
 
-## 为什么只出 debug APK
+## 为什么用 release + debug 签名
 
 debug APK 用 Android 调试证书签名，**可以直接安装测试**，但：
 

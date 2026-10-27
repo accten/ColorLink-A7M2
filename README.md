@@ -40,14 +40,16 @@ npx expo run:android                   # 装到真机
 
 1. 跑静态门禁（typecheck / lint / 99 个单测）；
 2. `expo prebuild` 生成原生工程；
-3. `./gradlew assembleDebug` 出 **debug APK**；
+3. `./gradlew assembleRelease` 出 **自包含 APK**（已内联 Hermes bundle，不依赖 Metro）；
 4. 把 APK 作为 Actions artifact 上传（保留 30 天）。
 
-取包路径：`GitHub → Actions → Android APK → 最近一次运行 → 页面底部 Artifacts → colorlink-debug-apk`。
-首次构建约 12~20 分钟（含 NDK/Gradle 冷启动），之后有缓存会快很多。
+取包路径：`GitHub → Actions → Android APK → 最近一次运行 → 页面底部 Artifacts → colorlink-apk`，
+解压得到 `app-release.apk`；也可以命令行 `gh run download <run-id> -n colorlink-apk`。
+首次构建约 15~25 分钟（含 Gradle/NDK 冷启动），之后有缓存会快很多。
 
-> debug APK 可以直接装到手机上测试（用 debug key 签名，不能上架，也不适合做分发给外部的正式版）。
-> 需要正式签名的 release APK 时，再往仓库 Secrets 里加 keystore 四项并扩展工作流即可（见 `docs/ci.md`）。
+> 这里产出的 release APK 由 Expo prebuild 默认的 **debug keystore** 签名，可以直接
+> `adb install` 到手机自测，但没有正式签名，不能上架、也不适合对外分发。
+> 需要正式签名时按 `docs/ci.md` 加 4 个 Secrets 并改用 release 签名配置。
 
 
 ```bash

@@ -39,3 +39,7 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# 本地从 Actions 下载的 APK
+build-artifacts/
+*.apk
