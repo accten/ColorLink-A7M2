@@ -1,11 +1,6 @@
-import { Asset as ExpoAsset } from 'expo-asset';
-import { File } from 'expo-file-system';
-
-import { ingestFileName } from '@/core/asset';
 import { eventLog } from '@/core/log';
-import { DEMO_FRAMES, DemoFrame } from '@/features/demo/frames';
-import { sha256OfFile } from '@/services/ingest';
-import { ingestFile } from '@/services/paths';
+import { DEMO_FRAMES } from '@/features/demo/frames';
+import { materializeDemoFrame } from '@/services/demoAssets';
 
 import { CameraError, CameraSnapshot, CapturedPhoto, ICameraTransport, IDLE_SNAPSHOT } from './types';
 
@@ -99,7 +94,7 @@ export class DemoCameraTransport implements ICameraTransport {
     const frame = DEMO_FRAMES[this.captureCursor % DEMO_FRAMES.length];
     this.captureCursor += 1;
     try {
-      const photo = await materialize(frame);
+      const photo = await materializeDemoFrame(frame, nextSeq());
       for (const listener of this.photoListeners) listener(photo);
       eventLog.info('camera.capture', { fileName: photo.fileName, bytes: photo.bytes });
       return { ok: true };
@@ -115,27 +110,4 @@ export class DemoCameraTransport implements ICameraTransport {
       };
     }
   }
-}
-
-/** 把 bundle 里的素材"当作"相机回传：复制进 ingest/ 并算摘要。 */
-async function materialize(frame: DemoFrame): Promise<CapturedPhoto> {
-  const bundled = ExpoAsset.fromModule(frame.module);
-  await bundled.downloadAsync();
-  const source = new File(bundled.localUri ?? bundled.uri);
-
-  const fileName = ingestFileName(new Date(), nextSeq(), 'png');
-  const target = ingestFile(fileName);
-  if (target.exists) target.delete();
-  await source.copy(target);
-
-  const hash = await sha256OfFile(target);
-  return {
-    uri: target.uri,
-    fileName,
-    bytes: target.size ?? 0,
-    width: frame.width,
-    height: frame.height,
-    capturedAt: Date.now(),
-    hash,
-  };
 }

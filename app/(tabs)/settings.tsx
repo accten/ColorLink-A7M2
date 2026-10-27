@@ -55,7 +55,11 @@ export default function SettingsScreen() {
     setLogText(
       entries.length
         ? entries
-            .map((e) => `${new Date(e.at).toLocaleTimeString()} ${e.level.toUpperCase()} ${e.event}`)
+            .map((e) => {
+              // 带上 data：真机上排查问题时，错误原因（第几步失败、哪个文件）都在这里
+              const data = e.data ? ` ${JSON.stringify(e.data)}` : '';
+              return `${new Date(e.at).toLocaleTimeString()} ${e.level.toUpperCase()} ${e.event}${data}`;
+            })
             .join('\n')
         : '暂无事件',
     );

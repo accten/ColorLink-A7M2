@@ -52,6 +52,15 @@ export class EventLog {
     };
     this.entries.push(entry);
     if (this.entries.length > this.capacity) this.entries.splice(0, this.entries.length - this.capacity);
+
+    // 同时打到控制台：`adb logcat -s ReactNativeJS` 就能看到，
+    // 排查真机问题不必再依赖 App 内的日志面板。
+    const line = `[ColorLink] ${event}`;
+    const payload = entry.data ?? '';
+    if (level === 'error') console.error(line, payload);
+    else if (level === 'warn') console.warn(line, payload);
+    else console.log(line, payload);
+
     return entry;
   }
 
