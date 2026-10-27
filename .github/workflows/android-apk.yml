@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: apk-${{ github.ref }}
+  group: apk-v2-${{ github.ref }}
   # 构建任务排队而不是互相取消：连续提交时只取消上一次是反效果
   cancel-in-progress: false
 
