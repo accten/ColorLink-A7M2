@@ -32,16 +32,15 @@ internal class SonyPtpTransport private constructor(
     private const val RESPONSE_ACCESS_DENIED = 0x200F
     private const val HANDLE_CAPTURED_IMAGE = -0x3FFF // 0xFFFFC001
     private const val HANDLE_LIVE_VIEW = -0x3FFE // 0xFFFFC002
-    private const val PROPERTY_FOCUS_FOUND = 0xD213
     private const val PROPERTY_OBJECT_IN_MEMORY = 0xD215
     private const val PROPERTY_LIVE_VIEW_STATUS = 0xD221
+
+    /** 快门控制码（SonyStillImage）：0xD2C2 */
+    private const val PROPERTY_CAPTURE_BUTTON = 0xD2C2
     private const val MAX_CONTAINER_BYTES = 100 * 1024 * 1024
     private const val MAX_USB_READ_BYTES = 64 * 1024
     private const val USB_TIMEOUT_MS = 5_000
 
-    /** Above this, prefer GetPartialObject over a single full-size GetObject allocation. */
-    private const val PARTIAL_TRANSFER_THRESHOLD_BYTES = 8L * 1024 * 1024
-    private const val PARTIAL_TRANSFER_CHUNK_BYTES = 4 * 1024 * 1024
 
     /** 没有 D215 的机身：等相机把这一张写完再读虚拟回传句柄（24MP JPEG 约 2~3s） */
     private const val CAPTURE_SETTLE_BEFORE_READ_MS = 2_800L
@@ -194,11 +193,17 @@ internal class SonyPtpTransport private constructor(
     return properties
   }
 
-  /** Sony 自有的虚拟取景句柄；有的机身在 D221 缺失时依然能读。 */
-  private fun probeLiveViewHandle(): Boolean = try {
+  /**
+   * 直接 `GetObject(0x1009)` 读 Sony 的虚拟句柄（取景 0xFFFFC002 / 已拍图像 0xFFFFC001）。
+   *
+   * 参考实现里没有 `D221` 门禁、也不先发 `GetObjectInfo(0x1008)`：
+   * A7 II 这一代对虚拟句柄发 `0x1008` 会**不回包**（USB 读超时，整条管线卡死），
+   * 而直接 `0x1009` 才是正常路径。所以这里只发 `0x1009`。
+   */
+  private fun getObjectDirect(handle: Int): ByteArray? {
     val result = execute(
-      0x1008,
-      intArrayOf(HANDLE_LIVE_VIEW),
+      0x1009,
+      intArrayOf(handle),
       expectsData = true,
       acceptedResponses = setOf(
         RESPONSE_OK,
@@ -207,16 +212,14 @@ internal class SonyPtpTransport private constructor(
         RESPONSE_ACCESS_DENIED,
       ),
     )
-    result.responseCode == RESPONSE_OK
-  } catch (error: SonyPtpException) {
-    trace("live-view handle probe failed: ${error.message ?: "unknown"}")
-    false
+    if (result.responseCode != RESPONSE_OK) return null
+    return result.data?.let(SonyPtpCodec::parseSonyJpegData)
   }
 
   fun prepareLiveView() {
-    // 先直接试虚拟句柄：部分机身（实测 ILCE-7M2）根本不报 D221，但句柄照样可用。
-    if (probeLiveViewHandle()) {
-      trace("live-view ready via object handle (no D221 gate)")
+    // 参考实现的取景路径：直接 GetObject(0x1009) @ 0xFFFFC002，没有 D221 门禁。
+    if (getObjectDirect(HANDLE_LIVE_VIEW) != null) {
+      trace("live-view ready via GetObject(0x1009) on 0xFFFFC002")
       return
     }
     var lastStatus: Long? = null
@@ -228,7 +231,7 @@ internal class SonyPtpTransport private constructor(
       }
       lastStatus = status
       if ((status ?: 0L) != 0L) {
-        if (probeLiveViewHandle()) return
+        if (getObjectDirect(HANDLE_LIVE_VIEW) != null) return
         probeRetries += 1
         if (probeRetries >= 5) {
           throw SonyPtpException(
@@ -245,30 +248,11 @@ internal class SonyPtpTransport private constructor(
   }
 
   fun getLiveViewJpeg(): ByteArray? {
-    // Sony requires ObjectInfo to be refreshed before each read of its virtual
-    // live-view handle. Repeating GetObject alone after AccessDenied can stall
-    // the A7 III USB transport.
-    val info = execute(
-      0x1008,
-      intArrayOf(HANDLE_LIVE_VIEW),
-      expectsData = true,
-      acceptedResponses = setOf(RESPONSE_OK, RESPONSE_INVALID_HANDLE, RESPONSE_DEVICE_BUSY),
-    )
-    if (info.responseCode != RESPONSE_OK) return null
-    val attempt = liveViewTransactions + 1
-    if (attempt <= 10) {
-      trace("live-view cycle=$attempt objectBytes=${info.data?.getOrNull(8)?.let { info.data.u32(8) } ?: "unknown"}")
-    }
-    val result = execute(
-      0x1009,
-      intArrayOf(HANDLE_LIVE_VIEW),
-      expectsData = true,
-      acceptedResponses = setOf(RESPONSE_OK, RESPONSE_ACCESS_DENIED),
-    )
-    if (result.responseCode == RESPONSE_ACCESS_DENIED) return null
-    val jpeg = result.data?.let(SonyPtpCodec::parseSonyJpegData)
+    // 取景帧就是 GetObject(0x1009) @ 0xFFFFC002 返回的 Sony 包裹数据（里面是 JPEG）。
+    // 不发 0x1008：A7 II 这一代对虚拟句柄的 GetObjectInfo 会不回包。
+    val jpeg = getObjectDirect(HANDLE_LIVE_VIEW)
     if (liveViewTransactions <= 10) {
-      trace("live-view cycle=$liveViewTransactions payloadBytes=${result.data?.size ?: 0} jpegBytes=${jpeg?.size ?: 0}")
+      trace("live-view cycle=$liveViewTransactions jpegBytes=${jpeg?.size ?: 0}")
     }
     return jpeg
   }
@@ -278,23 +262,11 @@ internal class SonyPtpTransport private constructor(
     captureProbeAttempts = 0
     loggedSettleWait = false
     captureStartedAt = SystemClock.elapsedRealtime()
-    setButton(0xD2C1, true)
-    SystemClock.sleep(90)
-    setButton(0xD2C2, true)
-    try {
-      // Sony's reference implementation waits briefly for the focus result
-      // before releasing the shutter buttons. Do not make focus a hard gate:
-      // manual-focus lenses and back-button-focus setups may never report it.
-      val focusDeadline = SystemClock.elapsedRealtime() + 1_000
-      while (SystemClock.elapsedRealtime() < focusDeadline) {
-        val focus = SonyPtpProperties.scalar(readDeviceProperties(), PROPERTY_FOCUS_FOUND)
-        if (focus == 2L || focus == 3L) break
-        SystemClock.sleep(50)
-      }
-    } finally {
-      runCatching { setButton(0xD2C2, false) }
-      runCatching { setButton(0xD2C1, false) }
-    }
+    // 参考实现的快门序列：只发 SonyStillImage(0xD2C2) 这一次控制，按下(2) → 等 1s → 松开(1)。
+    // 不再发 0xD2C1 半按：A7 II 上多出来的半按可能让机身停在半按态，后续读图全部失效。
+    setButton(PROPERTY_CAPTURE_BUTTON, 2)
+    SystemClock.sleep(1_000)
+    runCatching { setButton(PROPERTY_CAPTURE_BUTTON, 1) }
   }
 
   fun awaitCapturedJpeg(timeoutMs: Long): ByteArray {
@@ -326,7 +298,7 @@ internal class SonyPtpTransport private constructor(
 
     if (objectInMemory != null) {
       trace("Sony captured-object ready D215=${"0x%04X".format(objectInMemory)}")
-      val jpeg = readCapturedObject(HANDLE_CAPTURED_IMAGE) ?: return null
+      val jpeg = getObjectDirect(HANDLE_CAPTURED_IMAGE) ?: return null
       capturedObjectConsumed = true
       return jpeg
     }
@@ -341,7 +313,7 @@ internal class SonyPtpTransport private constructor(
         loggedSettleWait = true
         trace("capture: waiting ${CAPTURE_SETTLE_BEFORE_READ_MS}ms before reading the capture handle")
       }
-    val jpeg = readCapturedObject(HANDLE_CAPTURED_IMAGE)
+      return null
     }
     val now = SystemClock.elapsedRealtime()
     if (now - lastCaptureProbeAt < CAPTURE_PROBE_INTERVAL_MS) return null
@@ -350,7 +322,7 @@ internal class SonyPtpTransport private constructor(
       loggedMissingD215 = true
       trace("D215 missing on this body; probing the Sony capture handle")
     }
-    val jpeg = readCapturedObject(HANDLE_CAPTURED_IMAGE)
+    val jpeg = getObjectDirect(HANDLE_CAPTURED_IMAGE)
     if (jpeg != null) {
       capturedObjectConsumed = true
       return jpeg
@@ -366,78 +338,6 @@ internal class SonyPtpTransport private constructor(
     return null
   }
 
-  /**
-   * 读一张对象的完整 JPEG。
-   *
-   * Sony 的虚拟句柄（0xFFFFC001）要求先读 ObjectInfo 再 GetObject；标准对象句柄走同一套。
-   */
-  private fun readCapturedObject(handle: Int): ByteArray? {
-    val info = execute(
-      0x1008,
-      intArrayOf(handle),
-      expectsData = true,
-      acceptedResponses = setOf(RESPONSE_OK, RESPONSE_INVALID_HANDLE, RESPONSE_DEVICE_BUSY),
-    )
-    if (info.responseCode != RESPONSE_OK) return null
-    // ObjectInfo carries the compressed size at offset 8. Anything large is streamed with
-    // GetPartialObject rather than pulled into one allocation the size of the whole file.
-    val declaredSize = info.data?.takeIf { it.size >= 12 }?.u32(8) ?: 0L
-    val result = if (declaredSize > PARTIAL_TRANSFER_THRESHOLD_BYTES &&
-      deviceInfo?.supportsOperation(0x101B) == true
-    ) {
-      trace("captured object size=$declaredSize using GetPartialObject")
-      PtpResult(readObjectInChunks(handle, declaredSize), RESPONSE_OK)
-    } else {
-      execute(
-        0x1009,
-        intArrayOf(handle),
-        expectsData = true,
-        acceptedResponses = setOf(RESPONSE_OK, RESPONSE_INVALID_HANDLE, RESPONSE_DEVICE_BUSY),
-      )
-    }
-    if (result.responseCode != RESPONSE_OK) return null
-    return result.data?.let(SonyPtpCodec::parseSonyJpegData)
-      ?: throw SonyPtpException(
-        "Sony transferred the captured object, but it did not contain a readable JPEG (bytes=${result.data?.size ?: 0}).",
-      )
-  }
-
-  /**
-   * Streams an object with `GetPartialObject` (0x101B) in bounded windows.
-   *
-   * `GetObject` requires a single allocation the size of the whole file. A 60 MB RAW is a
-   * 60 MB contiguous byte array, which fails on mid-range Android devices long before the
-   * 100 MB container ceiling is reached. Reading in windows keeps peak transient memory at
-   * one chunk; the assembled result still has to fit in memory, but the allocation pattern
-   * no longer needs a single contiguous block of the full size up front.
-   */
-  private fun readObjectInChunks(handle: Int, declaredSize: Long): ByteArray {
-    val output = java.io.ByteArrayOutputStream(minOf(declaredSize, 8L * 1024 * 1024).toInt())
-    var offset = 0L
-    while (offset < declaredSize) {
-      val window = minOf(PARTIAL_TRANSFER_CHUNK_BYTES.toLong(), declaredSize - offset).toInt()
-      val chunk = execute(
-        0x101B,
-        intArrayOf(handle, offset.toInt(), window),
-        expectsData = true,
-        allowBusy = true,
-      )
-      val bytes = chunk.data
-      if (bytes == null || bytes.isEmpty()) {
-        // A short or empty window means the camera stopped supplying data. Returning what
-        // arrived lets the JPEG validator reject it, rather than looping forever.
-        trace("partial transfer ended early at offset=$offset of $declaredSize")
-        break
-      }
-      output.write(bytes)
-      offset += bytes.size
-      if (bytes.size < window) {
-        trace("partial transfer short window at offset=$offset expected=$window got=${bytes.size}")
-      }
-    }
-    trace("partial transfer complete bytes=${output.size()} declared=$declaredSize")
-    return output.toByteArray()
-  }
 
   fun close() {
     if (sessionOpen) runCatching { execute(0x1003) }
@@ -446,8 +346,12 @@ internal class SonyPtpTransport private constructor(
     connection.close()
   }
 
-  private fun setButton(code: Int, down: Boolean) {
-    execute(0x9207, intArrayOf(code), outgoingData = le16(if (down) 2 else 1))
+  /**
+   * Sony 的 `SetDeviceControlB(0x9207)`：参数是被控项（如 0xD2C2 快门），数据是 2 字节值。
+   * 参考实现里：按下 = 2，松开 = 1。
+   */
+  private fun setButton(code: Int, value: Int) {
+    execute(0x9207, intArrayOf(code), outgoingData = le16(value))
   }
 
   private fun execute(

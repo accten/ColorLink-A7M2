@@ -43,3 +43,6 @@ yarn-error.*
 # 本地从 Actions 下载的 APK
 build-artifacts/
 *.apk
+
+# 逆向分析工作区：含第三方 APK 与上游 REA 仓库，不进本仓库
+/REA (Reverse Engineer Anything)/
