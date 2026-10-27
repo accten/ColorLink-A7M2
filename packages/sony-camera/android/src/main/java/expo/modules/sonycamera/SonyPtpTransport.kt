@@ -43,6 +43,12 @@ internal class SonyPtpTransport private constructor(
     private const val PARTIAL_TRANSFER_THRESHOLD_BYTES = 8L * 1024 * 1024
     private const val PARTIAL_TRANSFER_CHUNK_BYTES = 4 * 1024 * 1024
 
+    /** 没有 D215 的机身：试读虚拟回传句柄的最小间隔，别把 USB 打满 */
+    private const val CAPTURE_PROBE_INTERVAL_MS = 400L
+
+    /** PTP 的 SessionAlreadyOpened：上一次会话没正常收尾时，机体就会回这个 */
+    private const val RESPONSE_SESSION_ALREADY_OPEN = 0x201E
+
     fun open(manager: UsbManager, device: UsbDevice, trace: (String) -> Unit): SonyPtpTransport {
       val target = (0 until device.interfaceCount)
         .map(device::getInterface)
@@ -90,19 +96,29 @@ internal class SonyPtpTransport private constructor(
   private var tracedPropertyCodes = false
 
   /**
-   * 标准 PTP 对象列表的基线（按下快门之前的那一份）。
-   *
-   * 较早的机身（实测 ILCE-7M2）不上报 `D215 ObjectInMemory`，所以"拍完了没有"
-   * 这个信号只能退回到 `GetObjectHandles` 的差集来判断。null 表示还没取过基线。
+   * 较早的机身（实测 ILCE-7M2）整条 `D215 ObjectInMemory` 都不上报，"拍完了没有"只能
+   * 靠反复试读 Sony 的虚拟回传句柄来判断。这两个字段只用于限流与"只打一次日志"。
    */
-  private var knownObjectHandles: Set<Int>? = null
+  private var loggedMissingD215 = false
+  private var lastCaptureProbeAt = 0L
 
   /** Populated during [authenticate]; null when the camera refused `GetDeviceInfo`. */
   var deviceInfo: SonyDeviceInfo? = null
     private set
 
   fun authenticate() {
-    execute(0x1002, intArrayOf(1))
+    val open = execute(
+      0x1002,
+      intArrayOf(1),
+      acceptedResponses = setOf(RESPONSE_OK, RESPONSE_SESSION_ALREADY_OPEN),
+    )
+    if (open.responseCode == RESPONSE_SESSION_ALREADY_OPEN) {
+      // 上一次会话没正常收尾（进程被杀、上一条命令超时）时机体回 SessionAlreadyOpened。
+      // 先 CloseSession 再重开一次，比让用户拔插 USB 线友好得多。
+      trace("OpenSession returned SessionAlreadyOpened; closing stale session and retrying once")
+      runCatching { execute(0x1003) }
+      execute(0x1002, intArrayOf(1))
+    }
     sessionOpen = true
     execute(0x9201, intArrayOf(1, 0, 0), expectsData = true)
     execute(0x9201, intArrayOf(2, 0, 0), expectsData = true)
@@ -158,18 +174,13 @@ internal class SonyPtpTransport private constructor(
   }
 
   /**
-   * 建立"拍之前"的对象列表基线。
+   * 标准 PTP 的对象列表。
    *
-   * `GetObjectHandles(0x1007, storageId=-1, format=0)` 是标准 PTP 操作，几乎所有
-   * 支持 PC Remote 的机身都实现了它。读不到就返回 null，capture 会退回 D215 判定。
+   * 实测 ILCE-7M2 在 PC 遥控模式下调用 `GetObjectHandles(0x1007)` 会让整条 USB 管线静默
+   * （20s 读超时，之后连 OpenSession 都回 SessionAlreadyOpened），因此**默认不调用**；
+   * 只在诊断开关打开时才用，作为对照机型行为的工具保留。
    */
-  private fun primeObjectHandles() {
-    knownObjectHandles = runCatching { objectHandles() }
-      .onSuccess { trace("capture baseline objectHandles=${it.size}") }
-      .onFailure { trace("capture baseline unavailable: ${it.message ?: it::class.java.simpleName}") }
-      .getOrNull()
-  }
-
+  @Suppress("unused")
   private fun objectHandles(): Set<Int> {
     val result = execute(0x1007, intArrayOf(-1, 0), expectsData = true, allowBusy = true)
     val data = result.data ?: return emptySet()
@@ -265,7 +276,6 @@ internal class SonyPtpTransport private constructor(
 
   fun captureStill() {
     capturedObjectConsumed = false
-    primeObjectHandles()
     setButton(0xD2C1, true)
     SystemClock.sleep(90)
     setButton(0xD2C2, true)
@@ -295,31 +305,38 @@ internal class SonyPtpTransport private constructor(
       }
       SystemClock.sleep(100)
     }
-    throw SonyPtpException("The camera fired, but no JPEG reached the app. Check PC Remote save settings and JPEG output.")
+    throw SonyPtpException(
+      "The camera fired, but no JPEG reached the app. Early bodies such as ILCE-7M2 may not " +
+        "export the capture over PTP: check PC Remote save settings, or import the card directly.",
+    )
   }
 
   fun pollCapturedJpeg(): ByteArray? {
     val properties = readDeviceProperties()
     val objectInMemory = SonyPtpProperties.scalar(properties, PROPERTY_OBJECT_IN_MEMORY)
-    if (objectInMemory != null && objectInMemory >= 0x8000) {
-      if (capturedObjectConsumed) return null
+
+    // 有 D215 的机身按 Sony 的规矩来：没到 0x8000 之前读虚拟句柄会打崩固件
+    if (objectInMemory != null && objectInMemory < 0x8000) {
+      capturedObjectConsumed = false
+      return null
+    }
+    if (capturedObjectConsumed) return null
+
+    if (objectInMemory != null) {
       trace("Sony captured-object ready D215=${"0x%04X".format(objectInMemory)}")
-      val jpeg = readCapturedObject(HANDLE_CAPTURED_IMAGE) ?: return null
-      capturedObjectConsumed = true
-      return jpeg
+    } else {
+      // 较早机身（实测 ILCE-7M2）整条 D215 都不存在：直接试读 Sony 的虚拟回传句柄。
+      // 读不到就返回 null，让 awaitCapturedJpeg 继续轮询。
+      if (!loggedMissingD215) {
+        loggedMissingD215 = true
+        trace("D215 missing on this body; probing captured-image handle directly")
+      }
+      val now = SystemClock.elapsedRealtime()
+      if (now - lastCaptureProbeAt < CAPTURE_PROBE_INTERVAL_MS) return null
+      lastCaptureProbeAt = now
     }
 
-    // 没有 D215（较早机身，实测 ILCE-7M2）：退回标准 PTP，用对象列表差集认出这一张。
-    val baseline = knownObjectHandles ?: return null
-    val current = runCatching { objectHandles() }.getOrNull() ?: return null
-    val fresh = current - baseline
-    if (fresh.isEmpty()) return null
-    val handle = fresh.max()
-    trace(
-      "captured object via GetObjectHandles handle=0x%04X fresh=${fresh.size} total=${current.size}".format(handle),
-    )
-    val jpeg = readCapturedObject(handle) ?: return null
-    knownObjectHandles = current - handle
+    val jpeg = readCapturedObject(HANDLE_CAPTURED_IMAGE) ?: return null
     capturedObjectConsumed = true
     return jpeg
   }
