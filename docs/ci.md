@@ -1,5 +1,23 @@
 # CI / APK 构建说明
 
+## 发版（GitHub Releases）
+
+`main` 上的每次推送只产出 Actions artifact（需登录、30 天过期）；
+**只有推 `v*` tag 才会创建 Release 并挂上 APK**：
+
+```bash
+git tag -a v0.1.1 -m "ColorLink v0.1.1"
+git push origin v0.1.1
+```
+
+工作流会：跑静态门禁 → prebuild → `assembleRelease` → 上传 artifact →
+用 `softprops/action-gh-release` 创建 `ColorLink v0.1.x` 并把 `app-release.apk` 作为发布附件
+（匿名可下载），Release 正文自动带上安装说明与本次改动列表。
+
+已发布版本：[v0.1.0](https://github.com/accten/ColorLink-A7M2/releases/tag/v0.1.0)
+（`app-release.apk` 57.44 MB，2026-10-27 构建）。
+
+
 ## 实测结果
 
 | 项 | 值 |
