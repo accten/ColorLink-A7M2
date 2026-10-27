@@ -1,5 +1,5 @@
 import { File } from 'expo-file-system';
-import { requestPermissionsAsync, saveToLibraryAsync } from 'expo-media-library';
+import { Asset as MediaAsset, requestPermissionsAsync } from 'expo-media-library';
 
 import { Asset, exportFileName, uniqueFileName } from '@/core/asset';
 import { Lut3D } from '@/core/lut';
@@ -85,13 +85,13 @@ export async function exportEdited(options: ExportOptions): Promise<ExportResult
     // 只有真正被拒时才申请/提示。之前"先 requestPermission 再写"的写法在
     // Android 17 上会直接拿到 denied，于是静默跳过，用户以为存进相册了。
     try {
-      await saveToLibraryAsync(output.uri);
+      await MediaAsset.create(output.uri);
       savedToGallery = true;
     } catch (directError) {
       try {
         const permission = await requestPermissionsAsync(true);
         if (!permission.granted) throw new Error('相册权限被拒绝');
-        await saveToLibraryAsync(output.uri);
+        await MediaAsset.create(output.uri);
         savedToGallery = true;
       } catch (error) {
         galleryError = error instanceof Error ? error.message : String(error);
