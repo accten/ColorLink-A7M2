@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { Href, router } from 'expo-router';
+import { SonyCameraView } from 'expo-sony-camera';
 import React, { useEffect, useState } from 'react';
 import { Animated, Pressable, StatusBar, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -60,7 +61,13 @@ export default function LiveScreen() {
       <StatusBar hidden />
 
       <Pressable style={styles.canvas} onPress={() => setZoomed((z) => !z)}>
-        {currentFrame != null ? (
+        {camera.mode === 'usb' ? (
+          // 真机取景由原生 View 直接上屏，帧不经过 JS
+          <SonyCameraView
+            active={camera.phase === 'live' || camera.phase === 'ready'}
+            style={{ width: '100%', height: '100%' }}
+          />
+        ) : currentFrame != null ? (
           <Image
             source={currentFrame}
             style={[styles.frame, zoomed && { transform: [{ scale: 1.8 }] }]}
@@ -71,10 +78,10 @@ export default function LiveScreen() {
           <View style={styles.placeholder}>
             <Ionicons name="videocam-off-outline" size={26} color={color.textFaint} />
             <T variant="monoMuted" style={{ marginTop: space.md }}>
-              真机取景需要链接 expo-sony-camera
+              演示帧不可用
             </T>
             <T variant="monoMuted" style={{ marginTop: 4 }}>
-              当前 {connected ? '已连接但无帧' : '未连接相机'}
+              当前 {connected ? '已连接' : '未连接相机'}
             </T>
           </View>
         )}

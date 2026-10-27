@@ -1,16 +1,13 @@
 import { CameraError, CameraSnapshot, CapturedPhoto, ICameraTransport, IDLE_SNAPSHOT } from './types';
+import { SonyCameraTransport, sonyModuleAvailable } from './sony';
 
 /**
- * USB 真机传输的占位实现。
+ * USB 真机传输的入口。
  *
- * 现状（M0 之前）：仓库还没有接入 `expo-sony-camera` 的原生层，所以这里
- * 返回一个"明确失败"的 transport —— 它会把原因、以及要改哪一行，直接显示给用户，
- * 而不是假装连接成功。
+ * - 装了 `expo-sony-camera`（原生模块）时 → SonyCameraTransport，走真实 PTP2
+ * - 否则 → MissingNativeTransport：明确失败并告诉用户要做什么，而不是假装连上
  *
- * 接入方式（M0 通过后）：
- *   1. npm i expo-sony-camera@0.2.1（或 vendor 到 packages/sony-camera 后 file: 引用）
- *   2. 把下面 createUsbTransport 的实现换成 SonyCameraTransport（见 docs/sony-transport.md）
- *   3. 上面的 UI / store / ingest 链路【零改动】—— 这正是抽 ICameraTransport 的目的
+ * 这一层是唯一需要知道"底层用哪个库"的地方，上层（store / 页面）只认 ICameraTransport。
  */
 
 const NOT_LINKED: CameraError = {
@@ -65,10 +62,10 @@ export class MissingNativeTransport implements ICameraTransport {
 }
 
 export function createUsbTransport(): ICameraTransport {
-  return new MissingNativeTransport();
+  return sonyModuleAvailable() ? new SonyCameraTransport() : new MissingNativeTransport();
 }
 
 /** 供 UI 判断"真机联机是否可用"，决定是否把 USB 按钮置灰。 */
 export function isUsbTransportAvailable(): boolean {
-  return false;
+  return sonyModuleAvailable();
 }

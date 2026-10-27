@@ -39,7 +39,8 @@
         }
       ],
       "expo-secure-store",
-      "expo-image"
+      "expo-image",
+      "expo-sony-camera"
     ],
     "experiments": {
       "typedRoutes": true

@@ -1,0 +1,255 @@
+import { File } from 'expo-file-system';
+import SonyCamera, { type SonyCameraState, type SonyCameraStateName, type SonyPhoto } from 'expo-sony-camera';
+
+import { ingestFileName } from '@/core/asset';
+import { eventLog } from '@/core/log';
+import { sha256OfFile } from '@/services/ingest';
+import { ingestFile } from '@/services/paths';
+
+import { CameraError, CameraSnapshot, CapturedPhoto, ICameraTransport, IDLE_SNAPSHOT } from './types';
+
+/**
+ * 真机 USB 联机（PTP2），基于 expo-sony-camera 原生模块。
+ *
+ * 模块职责边界：
+ *  - 原生模块负责 PTP 会话、取景帧、快门、相机侧照片回传（它自己处理 USB 权限）
+ *  - 这一层只做三件事：把模块状态翻译成我们的 CameraSnapshot、把照片落进 ingest/、
+ *    把错误整理成可读文案
+ *
+ * 取景帧不进 JS：`SonyCameraView` 直接在原生层显示，JS 只收状态事件。
+ */
+
+let seq = 0;
+const nextSeq = () => (seq = (seq % 999) + 1);
+
+const PHASE_BY_STATE: Record<SonyCameraStateName, CameraSnapshot['phase']> = {
+  unsupported: 'error',
+  disconnected: 'idle',
+  discovering: 'connecting',
+  candidate_found: 'connecting',
+  permission_required: 'connecting',
+  joining_network: 'connecting',
+  connecting: 'connecting',
+  authenticating: 'connecting',
+  ready: 'ready',
+  streaming: 'live',
+  capturing: 'live',
+  recording: 'live',
+  transferring: 'live',
+  reconnecting: 'connecting',
+  error: 'error',
+};
+
+function describeError(state: SonyCameraState): CameraError {
+  const hints = [
+    '确认相机 USB 连接模式为「PC 遥控」',
+    '使用支持数据传输的 OTG 线与转接头',
+    'A7M2 固件需为最新版本',
+  ];
+  const diagnostics = state.diagnostics?.filter(Boolean) ?? [];
+  return {
+    code: state.state === 'unsupported' ? 'E_NATIVE_NOT_LINKED' : 'E_HANDSHAKE',
+    message: state.message ?? '相机连接失败',
+    hints: diagnostics.length ? [...diagnostics.slice(-2), ...hints.slice(0, 1)] : hints,
+  };
+}
+
+export class SonyCameraTransport implements ICameraTransport {
+  readonly mode = 'usb' as const;
+
+  private snap: CameraSnapshot = { ...IDLE_SNAPSHOT, mode: 'usb' };
+  private readonly stateListeners = new Set<(s: CameraSnapshot) => void>();
+  private readonly photoListeners = new Set<(p: CapturedPhoto) => void>();
+  private readonly disposers: (() => void)[] = [];
+
+  constructor() {
+    const native = SonyCamera;
+    if (!native) return;
+
+    const bind = <T,>(event: 'onStateChanged' | 'onDeviceAttached' | 'onPhotoCaptured', handler: (payload: T) => void) => {
+      try {
+        const subscription = native.addListener(event, handler as never);
+        this.disposers.push(() => subscription?.remove?.());
+      } catch (error) {
+        eventLog.warn('camera.listener.failed', { event, error: String(error) });
+      }
+    };
+
+    bind<SonyCameraState>('onStateChanged', (state) => this.applyState(state));
+    bind<SonyCameraState>('onDeviceAttached', (state) => this.applyState(state));
+    bind<SonyPhoto>('onPhotoCaptured', (photo) => {
+      void this.handlePhoto(photo).catch((error) =>
+        eventLog.error('camera.photo.failed', { error: String(error) }),
+      );
+    });
+
+    try {
+      this.applyState(native.getState());
+    } catch (error) {
+      eventLog.warn('camera.state.failed', { error: String(error) });
+    }
+  }
+
+  snapshot(): CameraSnapshot {
+    return this.snap;
+  }
+
+  subscribe(listener: (s: CameraSnapshot) => void): () => void {
+    this.stateListeners.add(listener);
+    listener(this.snap);
+    return () => this.stateListeners.delete(listener);
+  }
+
+  onPhoto(listener: (p: CapturedPhoto) => void): () => void {
+    this.photoListeners.add(listener);
+    return () => this.photoListeners.delete(listener);
+  }
+
+  liveFrames(): number[] {
+    return [];
+  }
+
+  private requireModule() {
+    if (!SonyCamera) throw new Error('原生相机模块未加载（需要 development build）');
+    return SonyCamera;
+  }
+
+  private applyState(state: SonyCameraState): void {
+    const phase = PHASE_BY_STATE[state.state] ?? 'connecting';
+    const features = (state.device?.capabilities?.features ?? {}) as Record<string, unknown>;
+
+    this.snap = {
+      ...this.snap,
+      phase,
+      info: state.device
+        ? {
+            model: state.device.model,
+            firmware: state.device.firmware ?? state.device.productName ?? '—',
+            mode: 'usb',
+          }
+        : this.snap.info,
+      caps: state.device
+        ? {
+            liveView: Boolean(features.liveView ?? true),
+            stillCapture: Boolean(features.stillCapture ?? true),
+            imageTransfer: Boolean(features.imageTransfer ?? true),
+            deviceProps: Boolean(features.properties ?? false),
+          }
+        : this.snap.caps,
+      error: phase === 'error' ? describeError(state) : undefined,
+    };
+
+    eventLog.info('camera.state', {
+      state: state.state,
+      phase,
+      model: state.device?.model,
+      message: state.message,
+    });
+
+    for (const listener of this.stateListeners) listener(this.snap);
+  }
+
+  async connect(): Promise<CameraSnapshot> {
+    const native = this.requireModule();
+    eventLog.info('camera.connect', { mode: 'usb' });
+    const state = await native.connect({
+      preferredTransport: 'usb',
+      preferredProtocol: 'sony_camera_control_ptp2',
+    });
+    this.applyState(state);
+    if (this.snap.phase === 'error') {
+      throw new Error(this.snap.error?.message ?? '相机连接失败');
+    }
+    return this.snap;
+  }
+
+  async disconnect(): Promise<void> {
+    const native = SonyCamera;
+    if (native) {
+      try {
+        this.applyState(await native.disconnect());
+      } catch (error) {
+        eventLog.warn('camera.disconnect.failed', { error: String(error) });
+      }
+    }
+    this.snap = { ...IDLE_SNAPSHOT, mode: 'usb' };
+    for (const dispose of this.disposers.splice(0)) dispose();
+    for (const listener of this.stateListeners) listener(this.snap);
+  }
+
+  async startLiveView(): Promise<void> {
+    const state = await this.requireModule().startLiveView();
+    this.applyState(state);
+  }
+
+  async stopLiveView(): Promise<void> {
+    const state = await this.requireModule().stopLiveView();
+    this.applyState(state);
+  }
+
+  async capture(): Promise<{ ok: boolean; error?: CameraError }> {
+    try {
+      const photo = await this.requireModule().capturePhoto();
+      this.applyState({ ...this.requireModule().getState() });
+      await this.handlePhoto(photo);
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      eventLog.error('camera.capture.failed', { error: message });
+      return {
+        ok: false,
+        error: {
+          code: 'E_CAPTURE_TIMEOUT',
+          message: `快门失败：${message}`,
+          hints: ['确认相机在拍照模式且存储卡可写', '重新插拔后重试'],
+        },
+      };
+    }
+  }
+
+  /** 模块给的可能是 file:// 或 content://，统一读字节后写进 ingest/（保证后续导出可读）。 */
+  private async handlePhoto(photo: SonyPhoto): Promise<CapturedPhoto | null> {
+    if (!photo?.uri) return null;
+    const fileName = ingestFileName(new Date(), nextSeq(), 'jpg');
+    const target = ingestFile(fileName);
+
+    try {
+      const data = await new File(photo.uri).bytes();
+      if (!data?.length) throw new Error('照片字节为空');
+      if (target.exists) target.delete();
+      await target.write(data);
+      const hash = await sha256OfFile(target);
+      const captured: CapturedPhoto = {
+        uri: target.uri,
+        fileName,
+        bytes: data.length,
+        width: photo.width,
+        height: photo.height,
+        capturedAt: Date.now(),
+        hash,
+      };
+      eventLog.info('camera.photo.saved', { fileName, bytes: captured.bytes, width: photo.width, height: photo.height });
+      for (const listener of this.photoListeners) listener(captured);
+      return captured;
+    } catch (error) {
+      // 读取失败时退回模块给的原始 URI，至少让它进图库（导出时再报具体原因）
+      const message = error instanceof Error ? error.message : String(error);
+      eventLog.warn('camera.photo.copy.failed', { uri: photo.uri, error: message });
+      const fallback: CapturedPhoto = {
+        uri: photo.uri,
+        fileName: photo.fileName || fileName,
+        bytes: 0,
+        width: photo.width,
+        height: photo.height,
+        capturedAt: Date.now(),
+        hash: '',
+      };
+      for (const listener of this.photoListeners) listener(fallback);
+      return fallback;
+    }
+  }
+}
+
+export function sonyModuleAvailable(): boolean {
+  return SonyCamera != null;
+}
