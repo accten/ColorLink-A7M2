@@ -108,7 +108,12 @@ jobs:
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          # 只编 arm64-v8a：4 个 ABI 同时编 Skia/Reanimated 的 C++ 会打爆
+          # runner 内存（表现为 exit 143 / SIGTERM，无任何 Gradle 报错）。
+          # 自测 APK 也关掉 R8，省内存也省时间。
+          ./gradlew assembleRelease --no-daemon --stacktrace --max-workers=2 \
+            -PreactNativeArchitectures=arm64-v8a \
+            -Pandroid.enableMinifyInReleaseBuilds=false
 
       - name: Collect APK
         run: |
