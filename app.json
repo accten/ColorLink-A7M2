@@ -8,11 +8,6 @@
     "scheme": "colorlink",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#08090A",
-    "androidStatusBar": {
-      "backgroundColor": "#08090A",
-      "barStyle": "light-content",
-      "translucent": true
-    },
     "ios": {
       "supportsTablet": false
     },

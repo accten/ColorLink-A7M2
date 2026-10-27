@@ -44,18 +44,28 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # ubuntu-latest 镜像已预装 Android SDK 与 cmdline-tools。
+      # 不要用 android-actions/setup-android：它内部执行 `sdkmanager tools`，
+      # 新版本 cmdline-tools 已经没有 `tools` 包，会直接把 job 打挂。
+      - name: Verify Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          sdkmanager --version
+          java -version
 
       - name: Accept Android licenses
         run: yes | sdkmanager --licenses > /dev/null 2>&1 || true
 
       # RN 0.8x 的原生模块（reanimated/worklets/skia）需要 NDK + CMake。
-      # 装一个常用版本；若 RN 模板要求别的版本，AGP 会按 ndkVersion 自行补装。
+      # 预装几个常见版本；如果 RN 模板要求别的版本，AGP 会按 ndkVersion 自行补装。
       - name: Install NDK and CMake
         run: |
-          sdkmanager --install "ndk;27.1.12297006" "cmake;3.22.1" > /dev/null 2>&1 || true
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.1.12297006" >> "$GITHUB_ENV"
+          for v in "27.1.12297006" "28.0.13004108"; do
+            sdkmanager --install "ndk;$v" > /dev/null 2>&1 || true
+          done
+          sdkmanager --install "cmake;3.22.1" > /dev/null 2>&1 || true
+          ls "$ANDROID_HOME/ndk" 2>/dev/null || true
 
       - name: Install JS dependencies
         run: npm ci --no-audit --no-fund
