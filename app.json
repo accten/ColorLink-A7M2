@@ -13,6 +13,7 @@
     },
     "android": {
       "package": "app.colorlink.a7m2",
+      "versionCode": 1,
       "adaptiveIcon": {
         "backgroundColor": "#08090A",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
