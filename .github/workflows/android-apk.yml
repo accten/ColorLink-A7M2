@@ -7,6 +7,10 @@ on:
       - '**.md'
       - 'docs/**'
       - 'design-preview.html'
+      - '.gitignore'
+      - '.gitattributes'
+      - 'LICENSE'
+      - '.vscode/**'
   pull_request:
   workflow_dispatch:
 

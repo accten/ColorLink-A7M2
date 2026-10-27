@@ -15,11 +15,14 @@
 
 ## 为什么用 release + debug 签名
 
-debug APK 用 Android 调试证书签名，**可以直接安装测试**，但：
+`assembleDebug` 出来的 APK **不含 JS bundle**，装到手机上要连 Metro 才能启动；
+`assembleRelease` 会把 Hermes bundle 内联进 APK，而 Expo prebuild 生成的
+`android/app/build.gradle` 默认给 release 用 `signingConfigs.debug`。
 
-- 不能上传 Google Play；
-- 不能做「覆盖升级」形式的对外分发（换机器/换 CI 后签名会变）；
-- 部分系统会提示"来源未知"，需要手动允许安装。
+所以产物是：
+
+- ✅ 可以直接 `adb install` / 点开安装，独立运行（不依赖 Metro）；
+- ❌ 用 Android 调试证书签名：不能上架、不能做对外分发的覆盖升级。
 
 ## 需要正式签名的 release APK
 
