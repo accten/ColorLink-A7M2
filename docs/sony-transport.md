@@ -1,19 +1,28 @@
-# 接入真机 USB 联机（M0 之后的第一步）
+# 真机 USB 联机（已落地的实现与后续打法）
 
-当前仓库里的 `usb` transport 是**明确失败**的占位实现（`src/services/camera/usb.ts`）：
-连接时直接告诉用户"原生模块未接入"以及要做什么，而不是假装连上。
-这篇文章说明怎么把它换成真正能用的那一版。
+这套接入已经落到代码里了：`src/services/camera/sony.ts` 是真机 transport，`src/services/camera/usb.ts`
+在有原生模块时直接用它，取景页在 USB 模式挂原生 `SonyCameraView`。
+
+模块本身 vendor 在 `packages/sony-camera`（根 `package.json` 用 `file:` 引用），上游版本 0.2.1、MIT。
+**vendor 的原因和唯一的改动**记在 `packages/sony-camera/VENDORED.md`：上游用 `implementation files('libs/xxx.aar')`
+引得本地 AAR，AGP 8 构建库模块时会直接失败，必须改成 `flatDir` 仓库写法。
+
+本文保留原有步骤作为"当初是怎么接的 / 要重做时怎么做"的参考。
 
 > 前提：M0 已在 A7M2 上验证过「连接 / 取景 / 拍摄 / 回传」四项（见 `实现方案.md` 第 6 节）。
 
 ## 1. 装模块
 
 ```bash
-npm i expo-sony-camera@0.2.1
-# 建议：fork 到 packages/sony-camera 后用 file: 引用，方便按 A7M2 打补丁
+# 现在仓库里已经这么做了：vendor 到 packages/sony-camera，然后
+"expo-sony-camera": "file:packages/sony-camera"
+npm install
 npx expo prebuild --platform android   # 有新原生模块后必须重新 prebuild
 npx expo run:android
 ```
+
+如果要从上游重新拉：`npm i expo-sony-camera@0.2.1`，但**必须**同时改掉 `android/build.gradle`
+里的本地 AAR 依赖，否则 CI 的 `assembleRelease` 会失败。
 
 `app.json` 的插件数组里加上 `"expo-sony-camera"`（模块自带 config plugin，会注册
 USB_DEVICE_ATTACHED intent-filter 与 `android.hardware.usb.host` 特性）。

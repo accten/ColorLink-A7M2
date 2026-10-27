@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import Constants from 'expo-constants';
 import React, { useCallback, useState } from 'react';
 import { Alert, StyleSheet, Switch, TextInput, View } from 'react-native';
 
@@ -9,6 +10,9 @@ import { logFile, writeTextAtomic } from '@/services/paths';
 import { maskKey } from '@/services/settings';
 import { isUsbTransportAvailable } from '@/services/camera/usb';
 import { useAppStore } from '@/state/useAppStore';
+
+// 版本号只有 app.json 一处来源，避免界面上写死后忘了改
+const appVersion = Constants.expoConfig?.version ?? '—';
 
 export default function SettingsScreen() {
   const settings = useAppStore((s) => s.settings);
@@ -178,7 +182,7 @@ export default function SettingsScreen() {
       <View style={styles.section}>
         <Label>关于</Label>
         <Card style={{ marginTop: space.sm }}>
-          <Row label="ColorLink" value="0.1.0" />
+          <Row label="ColorLink" value={appVersion} />
           <Hairline />
           <Row label="目标机身" value="ILCE-7M2" />
           <Hairline />

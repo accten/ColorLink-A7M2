@@ -40,7 +40,8 @@
       ],
       "expo-secure-store",
       "expo-image",
-      "expo-sony-camera"
+      "expo-sony-camera",
+      "./plugins/withSonyFlatDir"
     ],
     "experiments": {
       "typedRoutes": true

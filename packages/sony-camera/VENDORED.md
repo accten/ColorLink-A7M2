@@ -17,7 +17,6 @@ AGP 8 在构建库模块（本模块自己产出 AAR）时会直接报错：
 Direct local .aar file dependencies are not supported when building an AAR.
 ```
 
-这个错误会让 `assembleRelease` 在配置阶段就失败，整个 APK 构建无法进行。
 改成用仓库解析即可绕过（同样是本地文件，但不再被判定为 "直接文件依赖"）：
 
 ```gradle
@@ -29,6 +28,19 @@ dependencies {
     implementation(name: 'UVCAndroid-sony-bulk-patched', ext: 'aar')
 }
 ```
+
+**光改这里还不够。** 库模块自己声明的 `flatDir` 只对它自己的配置生效；`:app` 解析
+`releaseRuntimeClasspath` 时会用**自己的**仓库列表，于是报：
+
+```
+Could not find :UVCAndroid-sony-bulk-patched:.
+Required by: project ':app' > project :expo > project :expo-sony-camera
+```
+
+所以消费方也必须能看到这个仓库。`android/` 是 prebuild 生成的，不能手改，因此仓库里加了
+`plugins/withSonyFlatDir.js`（`app.json` 里已引用）：它在 prebuild 时往根 `build.gradle`
+追加一段 `allprojects { repositories { flatDir { ... } } }`，路径用 `require.resolve` +
+`realpath` 从依赖真实位置算出来，不写死相对路径。
 
 另外两处小调整，只为让本地链接依赖在 prebuild/CI 下干净可用：
 
