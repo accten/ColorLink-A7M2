@@ -86,6 +86,17 @@ internal class SonyPtpTransport private constructor(
   private var bufferedInput = byteArrayOf()
   private var bufferedInputOffset = 0
 
+  /** 只为诊断打印一次：这台机身到底上报了哪些 Sony 属性 */
+  private var tracedPropertyCodes = false
+
+  /**
+   * 标准 PTP 对象列表的基线（按下快门之前的那一份）。
+   *
+   * 较早的机身（实测 ILCE-7M2）不上报 `D215 ObjectInMemory`，所以"拍完了没有"
+   * 这个信号只能退回到 `GetObjectHandles` 的差集来判断。null 表示还没取过基线。
+   */
+  private var knownObjectHandles: Set<Int>? = null
+
   /** Populated during [authenticate]; null when the camera refused `GetDeviceInfo`. */
   var deviceInfo: SonyDeviceInfo? = null
     private set
@@ -134,11 +145,72 @@ internal class SonyPtpTransport private constructor(
   /** Reads and parses every device property the camera currently reports. */
   private fun readDeviceProperties(): List<SonyDeviceProperty> {
     val result = execute(0x9209, expectsData = true, allowBusy = true)
-    return result.data?.let(SonyPtpProperties::parseAll).orEmpty()
+    val properties = result.data?.let(SonyPtpProperties::parseAll).orEmpty()
+    if (!tracedPropertyCodes && properties.isNotEmpty()) {
+      tracedPropertyCodes = true
+      // 老机身的方言差异全靠这行日志定位：哪些 D2xx 属性存在、哪些缺失
+      val sonyCodes = properties.map { it.code }.filter { it and 0xFF00 == 0xD200 }
+      trace(
+        "Sony device properties=${properties.size} sony=${sonyCodes.joinToString(",") { it.hex() }}",
+      )
+    }
+    return properties
+  }
+
+  /**
+   * 建立"拍之前"的对象列表基线。
+   *
+   * `GetObjectHandles(0x1007, storageId=-1, format=0)` 是标准 PTP 操作，几乎所有
+   * 支持 PC Remote 的机身都实现了它。读不到就返回 null，capture 会退回 D215 判定。
+   */
+  private fun primeObjectHandles() {
+    knownObjectHandles = runCatching { objectHandles() }
+      .onSuccess { trace("capture baseline objectHandles=${it.size}") }
+      .onFailure { trace("capture baseline unavailable: ${it.message ?: it::class.java.simpleName}") }
+      .getOrNull()
+  }
+
+  private fun objectHandles(): Set<Int> {
+    val result = execute(0x1007, intArrayOf(-1, 0), expectsData = true, allowBusy = true)
+    val data = result.data ?: return emptySet()
+    if (data.size < 4) return emptySet()
+    val count = data.u32(0).toInt()
+    val handles = LinkedHashSet<Int>(maxOf(count, 0))
+    for (index in 0 until count) {
+      val offset = 4 + index * 4
+      if (offset + 4 > data.size) break
+      handles.add(data.u32(offset).toInt())
+    }
+    return handles
+  }
+
+  /** Sony 自有的虚拟取景句柄；有的机身在 D221 缺失时依然能读。 */
+  private fun probeLiveViewHandle(): Boolean = try {
+    val result = execute(
+      0x1008,
+      intArrayOf(HANDLE_LIVE_VIEW),
+      expectsData = true,
+      acceptedResponses = setOf(
+        RESPONSE_OK,
+        RESPONSE_INVALID_HANDLE,
+        RESPONSE_DEVICE_BUSY,
+        RESPONSE_ACCESS_DENIED,
+      ),
+    )
+    result.responseCode == RESPONSE_OK
+  } catch (error: SonyPtpException) {
+    trace("live-view handle probe failed: ${error.message ?: "unknown"}")
+    false
   }
 
   fun prepareLiveView() {
+    // 先直接试虚拟句柄：部分机身（实测 ILCE-7M2）根本不报 D221，但句柄照样可用。
+    if (probeLiveViewHandle()) {
+      trace("live-view ready via object handle (no D221 gate)")
+      return
+    }
     var lastStatus: Long? = null
+    var probeRetries = 0
     repeat(50) { attempt ->
       val status = SonyPtpProperties.scalar(readDeviceProperties(), PROPERTY_LIVE_VIEW_STATUS)
       if (attempt == 0 || attempt % 10 == 0 || status != lastStatus) {
@@ -146,18 +218,19 @@ internal class SonyPtpTransport private constructor(
       }
       lastStatus = status
       if ((status ?: 0L) != 0L) {
-        try {
-          execute(0x1008, intArrayOf(HANDLE_LIVE_VIEW), expectsData = true)
-          return
-        } catch (error: SonyPtpException) {
-          if (!error.retryable) throw error
+        if (probeLiveViewHandle()) return
+        probeRetries += 1
+        if (probeRetries >= 5) {
+          throw SonyPtpException(
+            "LIVE_VIEW_UNSUPPORTED: Sony reported live-view status 0x%04X but the live-view object stayed unreadable.".format(status),
+          )
         }
       }
       SystemClock.sleep(100)
     }
     throw SonyPtpException(
-      "Sony live view did not become ready (D221=${lastStatus?.let { "0x%04X".format(it) } ?: "missing"}). " +
-        "Set USB Connection to PC Remote.",
+      "LIVE_VIEW_UNSUPPORTED: this body does not expose Sony live view over PTP2 " +
+        "(D221=${lastStatus?.let { "0x%04X".format(it) } ?: "missing"}).",
     )
   }
 
@@ -192,6 +265,7 @@ internal class SonyPtpTransport private constructor(
 
   fun captureStill() {
     capturedObjectConsumed = false
+    primeObjectHandles()
     setButton(0xD2C1, true)
     SystemClock.sleep(90)
     setButton(0xD2C2, true)
@@ -225,20 +299,40 @@ internal class SonyPtpTransport private constructor(
   }
 
   fun pollCapturedJpeg(): ByteArray? {
-    val objectInMemory = SonyPtpProperties.scalar(readDeviceProperties(), PROPERTY_OBJECT_IN_MEMORY)
-    if (objectInMemory == null || objectInMemory < 0x8000) {
-      capturedObjectConsumed = false
-      return null
+    val properties = readDeviceProperties()
+    val objectInMemory = SonyPtpProperties.scalar(properties, PROPERTY_OBJECT_IN_MEMORY)
+    if (objectInMemory != null && objectInMemory >= 0x8000) {
+      if (capturedObjectConsumed) return null
+      trace("Sony captured-object ready D215=${"0x%04X".format(objectInMemory)}")
+      val jpeg = readCapturedObject(HANDLE_CAPTURED_IMAGE) ?: return null
+      capturedObjectConsumed = true
+      return jpeg
     }
-    if (capturedObjectConsumed) return null
-    trace("Sony captured-object ready D215=${"0x%04X".format(objectInMemory)}")
 
-    // Sony warns that reading the virtual captured-image handle before D215
-    // reaches 0x8000 can crash camera firmware. ObjectInfo must also be read
-    // before GetObject for Sony's virtual handle.
+    // 没有 D215（较早机身，实测 ILCE-7M2）：退回标准 PTP，用对象列表差集认出这一张。
+    val baseline = knownObjectHandles ?: return null
+    val current = runCatching { objectHandles() }.getOrNull() ?: return null
+    val fresh = current - baseline
+    if (fresh.isEmpty()) return null
+    val handle = fresh.max()
+    trace(
+      "captured object via GetObjectHandles handle=0x%04X fresh=${fresh.size} total=${current.size}".format(handle),
+    )
+    val jpeg = readCapturedObject(handle) ?: return null
+    knownObjectHandles = current - handle
+    capturedObjectConsumed = true
+    return jpeg
+  }
+
+  /**
+   * 读一张对象的完整 JPEG。
+   *
+   * Sony 的虚拟句柄（0xFFFFC001）要求先读 ObjectInfo 再 GetObject；标准对象句柄走同一套。
+   */
+  private fun readCapturedObject(handle: Int): ByteArray? {
     val info = execute(
       0x1008,
-      intArrayOf(HANDLE_CAPTURED_IMAGE),
+      intArrayOf(handle),
       expectsData = true,
       acceptedResponses = setOf(RESPONSE_OK, RESPONSE_INVALID_HANDLE, RESPONSE_DEVICE_BUSY),
     )
@@ -250,22 +344,20 @@ internal class SonyPtpTransport private constructor(
       deviceInfo?.supportsOperation(0x101B) == true
     ) {
       trace("captured object size=$declaredSize using GetPartialObject")
-      PtpResult(readObjectInChunks(HANDLE_CAPTURED_IMAGE, declaredSize), RESPONSE_OK)
+      PtpResult(readObjectInChunks(handle, declaredSize), RESPONSE_OK)
     } else {
       execute(
         0x1009,
-        intArrayOf(HANDLE_CAPTURED_IMAGE),
+        intArrayOf(handle),
         expectsData = true,
         acceptedResponses = setOf(RESPONSE_OK, RESPONSE_INVALID_HANDLE, RESPONSE_DEVICE_BUSY),
       )
     }
     if (result.responseCode != RESPONSE_OK) return null
-    val jpeg = result.data?.let(SonyPtpCodec::parseSonyJpegData)
+    return result.data?.let(SonyPtpCodec::parseSonyJpegData)
       ?: throw SonyPtpException(
         "Sony transferred the captured object, but it did not contain a readable JPEG (bytes=${result.data?.size ?: 0}).",
       )
-    capturedObjectConsumed = true
-    return jpeg
   }
 
   /**

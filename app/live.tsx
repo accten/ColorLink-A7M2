@@ -62,11 +62,25 @@ export default function LiveScreen() {
 
       <Pressable style={styles.canvas} onPress={() => setZoomed((z) => !z)}>
         {camera.mode === 'usb' ? (
-          // 真机取景由原生 View 直接上屏，帧不经过 JS
-          <SonyCameraView
-            active={camera.phase === 'live' || camera.phase === 'ready'}
-            style={{ width: '100%', height: '100%' }}
-          />
+          camera.caps?.liveView === false ? (
+            // 实测 ILCE-7M2 的 PTP2 方言里没有 Sony 取景属性：这时不装样子，直接说清楚，
+            // 快门与回传仍然可用（它们不依赖取景）
+            <View style={styles.placeholder}>
+              <Ionicons name="videocam-off-outline" size={26} color={color.textFaint} />
+              <T variant="body" style={styles.noLiveTitle}>
+                本机型不支持 USB 实时取景
+              </T>
+              <T variant="monoMuted" style={styles.noLiveHint}>
+                仍可按下快门远程拍摄，拍完自动回传到图库
+              </T>
+            </View>
+          ) : (
+            // 真机取景由原生 View 直接上屏，帧不经过 JS
+            <SonyCameraView
+              active={camera.phase === 'live' || camera.phase === 'ready'}
+              style={{ width: '100%', height: '100%' }}
+            />
+          )
         ) : currentFrame != null ? (
           <Image
             source={currentFrame}
@@ -188,6 +202,8 @@ const styles = StyleSheet.create({
   canvas: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   frame: { width: '100%', height: '100%' },
   placeholder: { alignItems: 'center' },
+  noLiveTitle: { color: color.text, marginTop: space.md, textAlign: 'center' },
+  noLiveHint: { marginTop: 4, textAlign: 'center', paddingHorizontal: space.xl },
   gridLineV: { position: 'absolute', top: 0, bottom: 0, width: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.14)' },
   gridLineH: { position: 'absolute', left: 0, right: 0, height: StyleSheet.hairlineWidth, backgroundColor: 'rgba(255,255,255,0.14)' },
   top: {

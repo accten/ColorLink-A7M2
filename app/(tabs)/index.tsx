@@ -83,7 +83,7 @@ export default function ConnectScreen() {
         <View style={styles.statsRow}>
           <Stat label="电量" value={camera.battery != null ? `${camera.battery}%` : '—'} />
           <Stat label="存储" value={camera.mediaRemaining != null ? `${camera.mediaRemaining} 张` : '—'} />
-          <Stat label="取景" value={camera.fps ? `${camera.fps} fps` : connected ? '待机' : '—'} />
+          <Stat label="取景" value={camera.fps ? `${camera.fps} fps` : connected ? (camera.caps?.liveView === false ? '不支持' : '待机') : '—'} />
         </View>
 
         {camera.error ? (

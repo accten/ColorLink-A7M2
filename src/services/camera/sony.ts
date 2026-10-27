@@ -13,6 +13,15 @@ import { CameraError, CameraSnapshot, CapturedPhoto, ICameraTransport, IDLE_SNAP
 const CONNECT_TIMEOUT_MS = 15000;
 
 /**
+ * 模块原生的状态负载。
+ *
+ * `liveViewSupported` 是这一版原生代码新加的字段：较早的机身（实测 ILCE-7M2）
+ * PTP2 方言里没有 Sony 的取景属性，但我们补了「会话照常保留，只关掉取景」的处理，
+ * 于是需要在 JS 侧知道"取景不可用但相机是连着的"。
+ */
+type SonyStatePayload = SonyCameraState & { liveViewSupported?: boolean };
+
+/**
  * 真机 USB 联机（PTP2），基于 expo-sony-camera 原生模块。
  *
  * 模块职责边界：
@@ -79,8 +88,8 @@ export class SonyCameraTransport implements ICameraTransport {
       }
     };
 
-    bind<SonyCameraState>('onStateChanged', (state) => this.applyState(state));
-    bind<SonyCameraState>('onDeviceAttached', (state) => this.applyState(state));
+    bind<SonyCameraState>('onStateChanged', (state) => this.applyState(state as SonyStatePayload));
+    bind<SonyCameraState>('onDeviceAttached', (state) => this.applyState(state as SonyStatePayload));
     bind<SonyPhoto>('onPhotoCaptured', (photo) => {
       void this.handlePhoto(photo).catch((error) =>
         eventLog.error('camera.photo.failed', { error: String(error) }),
@@ -118,7 +127,7 @@ export class SonyCameraTransport implements ICameraTransport {
     return SonyCamera;
   }
 
-  private applyState(state: SonyCameraState): void {
+  private applyState(state: SonyStatePayload): void {
     const phase = PHASE_BY_STATE[state.state] ?? 'connecting';
     const features = (state.device?.capabilities?.features ?? {}) as Record<string, unknown>;
 
@@ -134,7 +143,8 @@ export class SonyCameraTransport implements ICameraTransport {
         : this.snap.info,
       caps: state.device
         ? {
-            liveView: Boolean(features.liveView ?? true),
+            // 原生明确说取景不可用时，不要假装能取景（实测 ILCE-7M2 就没有 Sony 取景属性）
+            liveView: state.liveViewSupported !== false && Boolean(features.liveView ?? true),
             stillCapture: Boolean(features.stillCapture ?? true),
             imageTransfer: Boolean(features.imageTransfer ?? true),
             deviceProps: Boolean(features.properties ?? false),

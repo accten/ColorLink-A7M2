@@ -42,6 +42,9 @@ internal class SonyCameraController(private val context: Context) {
     private const val SCALAR_RECONNECT_DELAY_MS = 750L
     private const val SCALAR_DISCOVERY_COOLDOWN_MS = 2_000L
     private val CONNECT_OPTION_KEYS = setOf("candidateId", "preferredProtocol", "preferredTransport")
+
+    /** 取景不可用但会话可用时的错误前缀：上层看到它就别把 PTP 会话一起拆掉 */
+    private const val LIVE_VIEW_UNSUPPORTED_PREFIX = "LIVE_VIEW_UNSUPPORTED"
   }
 
   private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -69,6 +72,8 @@ internal class SonyCameraController(private val context: Context) {
   private var state = "disconnected"
   private var message: String? = null
   private var frameFuture: Future<*>? = null
+  /** 实测机身不支持 USB 取景时为 true：会话保留，只关掉取景 */
+  @Volatile private var liveViewUnsupported = false
   private var frameCount = 0
   private var liveViewWidth = 0
   private var liveViewHeight = 0
@@ -417,6 +422,14 @@ internal class SonyCameraController(private val context: Context) {
           }
         } catch (error: SonyPtpException) {
           if (!streaming.get()) break
+          if (isLiveViewUnsupported(error)) {
+            // 机身不给取景 ≠ 联机失败：快门与回传仍然可用，别把 PTP 会话一起拆掉。
+            trace("live view unsupported by this body; keeping the PTP session alive")
+            liveViewUnsupported = true
+            streaming.set(false)
+            updateState("ready", "该机型不支持 USB 实时取景（PTP2 方言差异），但可以远程快门与回传照片。")
+            break
+          }
           if (!error.retryable) {
             fail(error)
             break
@@ -581,6 +594,9 @@ internal class SonyCameraController(private val context: Context) {
     usbManager.requestPermission(attached, pending)
   }
 
+  private fun isLiveViewUnsupported(error: SonyPtpException): Boolean =
+    error.message?.startsWith(LIVE_VIEW_UNSUPPORTED_PREFIX) == true
+
   private fun fail(error: Throwable) {
     trace("failure ${error::class.java.simpleName}: ${error.message ?: "no message"}")
     val lostScalarConnection = scalarTransport != null && isConnectionLoss(error)
@@ -657,6 +673,8 @@ internal class SonyCameraController(private val context: Context) {
     val result = linkedMapOf<String, Any?>("state" to state)
     if (message != null) result["message"] = message
     result["diagnostics"] = diagnosticSnapshot()
+    // 取景是否可用：true 表示这次会话支持 USB 实时取景（有的机身不支持，但快门/回传正常）
+    result["liveViewSupported"] = !liveViewUnsupported
     if (attached != null) {
       result["device"] = mapOf(
         "vendorId" to attached.vendorId,
