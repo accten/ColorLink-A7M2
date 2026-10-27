@@ -68,8 +68,20 @@ debug APK 用 Android 调试证书签名，**可以直接安装测试**，但：
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| `NDK not found` / `ndkVersion` 报错 | RN 模板要求的 NDK 与工作流预装版本不同 | AGP 会按 `ndkVersion` 自动下载；若失败，把 `sdkmanager --install "ndk;<版本>"` 里的版本改成 `android/build.gradle` 里写的那个 |
+| `Warning: Failed to find package 'tools'` + job 挂在 "Setup Android SDK" | `android-actions/setup-android@v3` 内部执行 `sdkmanager tools`，新版 cmdline-tools（16.x）已无该包 | **不要用这个 action**；`ubuntu-latest` 已预装 SDK，直接用 `sdkmanager` |
+| `NDK not found` / `ndkVersion` 报错 | RN 模板要求的 NDK 与工作流预装版本不同 | AGP 会按 `ndkVersion` 自动下载；若失败，把 `sdkmanager --install "ndk;<版本>"` 换成 `android/build.gradle` 里的实际版本 |
 | `Keystore file not set for signing config release` | 用了 release 但没有签名配置 | 先只打 debug，或按上文加 secrets |
-| Gradle OOM / 构建被杀 | Skia + Reanimated 编译吃内存 | 已设置 `-Xmx4g`；必要时把 `assembleDebug` 拆成 `:app:assembleDebug` 单模块 |
+| Gradle OOM / 构建被杀 | Skia + Reanimated 编译吃内存 | 已设置 `-Xmx4g`；必要时拆成 `:app:assembleDebug` 单模块 |
 | `npm ci` 报 lock 不一致 | 改了 `package.json` 没更新 lock | 本地 `npm install` 后一起提交 `package-lock.json` |
 | 构建超 60 分钟 | 冷缓存 + 低配 runner | 保留 Gradle 缓存（工作流已配），或改用 self-hosted runner |
+| 白屏 / 启动瞬间白底闪一下 | `userInterfaceStyle: dark` 需要 `expo-system-ui` | 已加入依赖；改了主题配置记得确认它在 `package.json` 里 |
+
+## 版本速查（本仓库 prebuild 实际产出）
+
+| 项 | 版本 |
+|---|---|
+| Gradle wrapper | 9.4.1 |
+| JDK（CI） | Temurin 17 |
+| Node（CI） | 22 |
+| NDK 预装 | 27.1.12297006 / 28.0.13004108（AGP 会按需补装） |
+| CMake | 3.22.1 |

@@ -44,13 +44,22 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # ubuntu-latest 镜像已预装 Android SDK 与 cmdline-tools。
+      # ubuntu-latest 镜像已预装 Android SDK 与 cmdline-tools，但 sdkmanager 不一定在 PATH 上。
       # 不要用 android-actions/setup-android：它内部执行 `sdkmanager tools`，
       # 新版本 cmdline-tools 已经没有 `tools` 包，会直接把 job 打挂。
-      - name: Verify Android SDK
+      - name: Configure Android SDK
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          SDK_BIN=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin 2>/dev/null | head -n1)
+          if [ -z "$SDK_BIN" ]; then
+            echo "::error::cmdline-tools not found under $ANDROID_HOME"
+            ls -la "$ANDROID_HOME" || true
+            exit 1
+          fi
+          echo "sdkmanager dir: $SDK_BIN"
+          echo "$SDK_BIN" >> "$GITHUB_PATH"
+          export PATH="$SDK_BIN:$PATH"
           sdkmanager --version
           java -version
 
