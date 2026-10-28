@@ -14,7 +14,7 @@ import org.junit.Test
  * plugged in: the layout rules have to be provable from the documented format, and one bad
  * record must not silently hide every later property.
  */
-class SonyPtpPropertiesTest {
+class SonyPropertyArrayTest {
   @Test
   fun parsesSequentialDpdRecords() {
     val blob = blobOf(
@@ -36,7 +36,8 @@ class SonyPtpPropertiesTest {
   @Test
   fun keepsEarlierRecordsWhenALaterRecordIsTruncated() {
     val complete = record(0xD215, DATATYPE_UINT16, factory = 0, currentValue = 0x8000)
-    val truncated = blobOf(complete).copyOf(8 + complete.size + 3)
+    // Claim two records but only deliver one and a half: the first record must still be usable.
+    val truncated = blobDeclaring(2, complete).copyOf(8 + complete.size + 3)
 
     val scan = SonyPtpProperties.scan(truncated)
 
@@ -50,7 +51,7 @@ class SonyPtpPropertiesTest {
   fun reportsWhereTheSequentialWalkStopped() {
     // An unknown datatype has no width, so the walk cannot continue past it.
     val blob = blobOf(
-      record(0x5004, 0x0040, factory = 0, currentValue = 0),
+      rawRecord(0x5004, 0x0040, ByteArray(8)),
       record(0xD215, DATATYPE_UINT16, factory = 0, currentValue = 0x8001),
     )
 
@@ -66,7 +67,7 @@ class SonyPtpPropertiesTest {
     // This is the ILCE-7M2 situation: the sequential walk dies early, but the record header
     // for D215 is still intact later in the payload.
     val blob = blobOf(
-      record(0x5004, 0x0040, factory = 0, currentValue = 0),
+      rawRecord(0x5004, 0x0040, ByteArray(8)),
       record(0xD215, DATATYPE_UINT16, factory = 0, currentValue = 0x8001),
     )
 
@@ -125,12 +126,25 @@ class SonyPtpPropertiesTest {
     assertEquals(SonyVendorCodes(), parseSonyVendorCodes(bytes.toByteArray()))
   }
 
-  private fun blobOf(vararg records: ByteArray): ByteArray {
+  private fun blobOf(vararg records: ByteArray): ByteArray = blobDeclaring(records.size, *records)
+
+  private fun blobDeclaring(declaredCount: Int, vararg records: ByteArray): ByteArray {
     val out = ByteArrayOutputStream()
     // 8 bytes before the first record: a 32-bit element count followed by a 32-bit zero,
     // which the reader consumes as one little-endian UINT64.
-    writeU64(out, records.size.toLong())
+    writeU64(out, declaredCount.toLong())
     records.forEach { out.write(it) }
+    return out.toByteArray()
+  }
+
+  /** A record header followed by arbitrary bytes, for datatypes the writer cannot encode. */
+  private fun rawRecord(code: Int, dataType: Int, body: ByteArray): ByteArray {
+    val out = ByteArrayOutputStream()
+    writeU16(out, code)
+    writeU16(out, dataType)
+    out.write(0)
+    out.write(1)
+    out.write(body)
     return out.toByteArray()
   }
 

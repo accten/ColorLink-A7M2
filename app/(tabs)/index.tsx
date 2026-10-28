@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { Href, router } from 'expo-router';
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import { Alert, Pressable, StyleSheet, View } from 'react-native';
 
 import { formatBytes, formatClock, formatDimensions } from '@/core/asset';
@@ -21,11 +21,20 @@ export default function ConnectScreen() {
   const disconnect = useAppStore((s) => s.disconnectCamera);
   const startLive = useAppStore((s) => s.startLiveView);
   const capture = useAppStore((s) => s.capture);
+  const refreshExposure = useAppStore((s) => s.refreshExposure);
 
   const connected = camera.phase === 'ready' || camera.phase === 'live';
   const usbReady = isUsbTransportAvailable();
   const recent = assets.slice(0, 3);
   const latestSession = assets.length ? sessions[assets[0].id] : undefined;
+
+  // 相机页面上的电量：和监看页同一条只读属性通道，节奏放慢，失败会自动熔断。
+  useEffect(() => {
+    if (!connected) return;
+    void refreshExposure();
+    const timer = setInterval(() => void refreshExposure(), 4_000);
+    return () => clearInterval(timer);
+  }, [connected, refreshExposure]);
 
   const openLive = useCallback(() => {
     void startLive().then(() => router.push('/live' as Href));
