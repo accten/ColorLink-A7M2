@@ -360,8 +360,8 @@ internal class SonyPtpTransport private constructor(
   }
 
   /** One `0x9209` read: the camera's whole property array, or null when it refused. */
-  private fun readPropertyBlob(): ByteArray? {
-    val result = execute(0x9209, expectsData = true, allowBusy = true)
+  private fun readPropertyBlob(maxReadRetries: Int = MAX_READ_RETRIES): ByteArray? {
+    val result = execute(0x9209, expectsData = true, allowBusy = true, maxReadRetries = maxReadRetries)
     val raw = result.data
     if (raw == null || raw.size < 12) return null
     return raw
@@ -457,7 +457,8 @@ internal class SonyPtpTransport private constructor(
     // 真机上"读属性把链路读死"不是假设，是已经踩过的坑。
     if (exposurePollingDisabled) return emptyMap()
     val raw = try {
-      readPropertyBlob()
+      // 只用 2 次重试：这条路径每秒都在跑，卡住一次最多 10 秒，不能像取图那样等 25 秒。
+      readPropertyBlob(maxReadRetries = 2)
     } catch (error: Throwable) {
       noteExposureFailure(error.message ?: error::class.java.simpleName)
       return emptyMap()
@@ -635,7 +636,8 @@ internal class SonyPtpTransport private constructor(
         trace("focus found D213=0x%04X".format(focus))
         break
       }
-      SystemClock.sleep(50)
+      // 0x9209 是整份属性数组（1KB+），别按 50ms 的节奏灌给相机
+      SystemClock.sleep(150)
     }
 
     runCatching { setButton(PROPERTY_CAPTURE_BUTTON, 1) }

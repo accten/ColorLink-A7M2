@@ -155,9 +155,15 @@
 ```bash
 npx tsc --noEmit          # 类型
 npx eslint app src tests  # 静态检查
-npx vitest run            # 99 个用例
+npx vitest run            # 126 个用例
 npx expo-doctor           # 依赖/配置
 npx expo export -p android --output-dir .export-check   # 生产打包（产物可删）
+```
+
+原生解析器（属性数组 / 对象载荷 / 曝光解码）另有本地通道，不需要 Android SDK：
+
+```powershell
+pwsh scripts/test-kotlin.ps1    # 49 个 Kotlin 用例，约 3 秒
 ```
 
 ## 7. 第六轮（v0.1.2 前）：真机复测与新增功能
@@ -187,3 +193,26 @@ npx expo export -p android --output-dir .export-check   # 生产打包（产物�
 | D12 | 取景已经出帧，界面仍显示「本机型不支持 USB 实时取景」 | `caps.liveView` 取自 DeviceInfo 的能力位，而 A7M2 的 properties=0 | 以原生 `liveViewSupported` 为准 |
 | D13 | 按完快门取景直接停，界面报联机错误 | 取景线程每 10 帧调 `pollCapturedJpeg()`，无新图时抛 CAPTURE_UNSUPPORTED，被当成联机失败 | 新增 `captureInProgress`，取景轮询安静返回 |
 | D14 | 冷启动一张缩略图都不补 | 筛选只比对 thumbUri 是否等于原图，漏掉「thumbUri 指向已失效文件」的旧数据 | 同时检查文件是否存在 |
+
+## 8. 原生解析器的本地测试通道（v0.1.3）
+
+Android 模块里真正"容易错"的部分是解析：PTP 容器、Sony 属性数组、对象载荷、曝光解码。
+这些都不 import `android.*`，所以不必等十几分钟的 Gradle 构建：
+
+```powershell
+pwsh scripts/test-kotlin.ps1     # kotlinc + JUnit，49 个用例，约 3 秒
+```
+
+依赖（本机 `_work/`，不入库）：`kotlin-compiler-2.1.0`、`junit-4.13.2`、`hamcrest-core-1.3`、JDK 17。
+
+这条通道第一次跑就抓到 4 个失败，其中一个是**真 bug**：
+
+| 编号 | 现象 | 根因 | 修复 |
+|---|---|---|---|
+| D15 | `parseSonyVendorCodes` 遇到 `count=0x7FFFFFFF` 直接 `OutOfMemoryError` | 边界检查 `offset + count * 2` 用 Int 计算，`count*2` 溢出成负数后"通过"了检查，随后 `ArrayList(count)` 分配 2G | 改用 Long 比较，并加 512 条上限 |
+
+另外 3 个失败是测试自己的构造有误（声明 1 条却给了半条、用未知 DataType 却让 helper 去编码），
+改成显式构造字节后通过。
+
+APK 工作流里也加了 `:expo-sony-camera:test`（聚合任务，不随 AGP 改名的变体后缀任务走），
+CI 每次构建都会跑同一批用例。
