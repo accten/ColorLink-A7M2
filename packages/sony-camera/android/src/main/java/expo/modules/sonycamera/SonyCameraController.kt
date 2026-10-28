@@ -525,7 +525,9 @@ internal class SonyCameraController(private val context: Context) {
     val active = transport
       ?: return mapOf("ok" to false, "error" to "Sony PTP session is not open (USB only)")
     val result = active.probeVendorOp(operation, params)
-    trace("probe op=${operation.hex()} params=${params.joinToString { it.hex32() }} result=$result")
+    val opText = "0x%04X".format(operation)
+    val paramsText = params.joinToString(",") { "0x%08X".format(it) }
+    trace("probe op=$opText params=$paramsText result=$result")
     return result
   }
   fun focusAtBlocking(x: Double, y: Double, viewWidth: Double, viewHeight: Double): Map<String, Any?> {
