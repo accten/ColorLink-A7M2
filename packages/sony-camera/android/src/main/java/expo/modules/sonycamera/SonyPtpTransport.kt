@@ -162,12 +162,6 @@ internal class SonyPtpTransport private constructor(
   /** 一次拍摄里只记一次命令失败，否则 100 次轮询会写 100 行日志 */
   private var loggedCaptureReadFailure = false
 
-  /** 0x1014 连续读不到 D215 的次数：够多就不再用它，避免每次轮询空跑一条命令 */
-  private var propDescMisses = 0
-
-  /** 已经打过日志的属性读取失败（"属性/返回码"），避免刷屏 */
-  private val propDescFailures = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-
   /** 已经打过日志的成功属性读数 */
   private val propDescObserved = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
 
@@ -339,98 +333,52 @@ internal class SonyPtpTransport private constructor(
     runCatching { execute(0x9205, intArrayOf(0x5013), outgoingData = le32(1)) }
   }
 
-  /** Reads and parses every device property the camera currently reports. */
+  /** Reads and parses every device property the camera currently reports (0x9209). */
   private fun readDeviceProperties(): List<SonyDeviceProperty> {
     val result = execute(0x9209, expectsData = true, allowBusy = true)
-    val raw = result.data
-    val properties = raw?.let(SonyPtpProperties::parseAll).orEmpty()
-    // 只打一次原始字节：早期机身的属性容器格式和老机身解析器对不上时，
-    // 光看"parsed=0"没法定位，得看到真实字节（ILCE-7M2 就是这种情况）。
-    if (!tracedPropertyCodes && raw != null) {
+    val raw = result.data ?: return emptyList()
+    val scan = SonyPtpProperties.scan(raw)
+    if (!tracedPropertyCodes) {
       tracedPropertyCodes = true
-      val sonyCodes = properties.map { it.code }.filter { it and 0xFF00 == 0xD200 }
+      val sonyCodes = scan.parsed.map { it.code }.filter { it and 0xFF00 == 0xD200 }
       trace(
-        "Sony prop blob bytes=${raw.size} parsed=${properties.size} " +
-          "head=${raw.take(48).joinToString("") { "%02X".format(it) }}",
+        "Sony prop blob bytes=${raw.size} declared=${scan.declared} parsed=${scan.parsed.size} " +
+          "failure=${scan.failure ?: "-"} at=${scan.failureOffset} window=${scan.window}",
       )
-      trace("Sony device properties=${properties.size} sony=${sonyCodes.joinToString(",") { it.hex() }}")
+      trace("Sony device properties=${scan.parsed.size} sony=${sonyCodes.joinToString(",") { it.hex() }}")
+      // 整包按 120 字符分段打一次：解析器和这具机身的记录格式对不上时，这是唯一的原始证据
+      val hex = raw.joinToString("") { "%02X".format(it) }
+      var part = 0
+      var index = 0
+      while (index < hex.length) {
+        trace("propblob[$part]=${hex.substring(index, minOf(index + 120, hex.length))}")
+        index += 120
+        part += 1
+      }
     }
-    return properties
+    return scan.parsed
   }
 
   /**
-   * 读单个属性的当前值：标准 `GetDevicePropDesc(0x1014)`。
+   * 读单个属性的当前值。
    *
-   * 老机身（ILCE-7M2）的 `0x9209` 属性大容器解析不出任何条目，但 `0x1014` 逐条问是有回的 ——
-   * 上一版就是只走 0x9209，结果 D215/D213 都被判成"这台机身没有"，取图逻辑只能瞎猜。
+   * **不能用 0x1014。** 这台机身的 DeviceInfo 操作表里根本没有标准 `GetDevicePropDesc(0x1014)`：
+   *
+   *   ops=[0x1001..0x100A,0x101B,0x9201,0x9202,0x9205,0x9207,0x9209]
+   *
+   * 真机上发 0x1014 的后果是 USB 读立刻返回 -1，随后连写命令都返回 -1 ——
+   * 整个 bulk 端点报废、只能重插（三次真机复现）。Sony 自己的 `GetDevicePropDesc`
+   * 是厂商码 0x9203，但那也没在支持表里。
+   *
+   * 唯一可用的属性通道是 `0x9209 SDIO_GetAllExtDevicePropInfo`：它一次交出整份
+   * 属性数组（这台机身上 1118 字节），再按 Sony 的 DPD 记录格式解出 D215/D213。
    */
-  fun readPropDescCurrent(propCode: Int, readRetries: Int = 2): Long? {
-    val result = execute(
-      0x1014,
-      intArrayOf(propCode),
-      expectsData = true,
-      maxReadRetries = readRetries,
-      acceptedResponses = setOf(
-        RESPONSE_OK,
-        RESPONSE_INVALID_HANDLE,
-        RESPONSE_DEVICE_BUSY,
-        RESPONSE_ACCESS_DENIED,
-      ),
-    )
-    val data = result.data
-    if (result.responseCode != RESPONSE_OK) {
-      // 只打一次（同一属性同一返回码）：真机上"读不到"和"读到了但解析失败"要能分开看
-      val key = "%04X/%04X".format(propCode, result.responseCode)
-      if (propDescFailures.add(key)) {
-        trace(
-          "propdesc 0x%04X code=0x%04X bytes=%d head=%s".format(
-            propCode,
-            result.responseCode,
-            data?.size ?: 0,
-            data?.take(16)?.joinToString("") { "%02X".format(it) } ?: "",
-          ),
-        )
-      }
-      return null
-    }
-    if (data == null) return null
-    if (data.size < 7) return null
-    val dataType = data.u16(2)
-    val size = when (dataType) {
-      0x0001, 0x0002 -> 1 // INT8 / UINT8
-      0x0003, 0x0004 -> 2 // INT16 / UINT16
-      0x0005, 0x0006 -> 4 // INT32 / UINT32
-      0x0007, 0x0008 -> 8 // INT64 / UINT64
-      else -> {
-        val key = "%04X/type".format(propCode)
-        if (propDescFailures.add(key)) {
-          trace(
-            "propdesc 0x%04X unknown dataType=0x%04X head=%s".format(
-              propCode,
-              dataType,
-              data.take(16).joinToString("") { "%02X".format(it) },
-            ),
-          )
-        }
-        return null
-      }
-    }
-    val currentOffset = 5 + size
-    if (data.size < currentOffset + size) return null
-    var value = 0L
-    for (index in 0 until size) {
-      value = value or ((data[currentOffset + index].toLong() and 0xFFL) shl (8 * index))
-    }
-    if (propDescObserved.add(propCode)) {
-      trace(
-        "propdesc 0x%04X type=0x%04X value=0x%X bytes=%d head=%s".format(
-          propCode,
-          dataType,
-          value,
-          data.size,
-          data.take(16).joinToString("") { "%02X".format(it) },
-        ),
-      )
+  fun readPropertyValue(propCode: Int): Long? {
+    val properties = readDeviceProperties()
+    if (properties.isEmpty()) return null
+    val value = SonyPtpProperties.scalar(properties, propCode)
+    if (value != null && propDescObserved.add(propCode)) {
+      trace("prop 0x%04X value=0x%X (from 0x9209)".format(propCode, value))
     }
     return value
   }
@@ -532,7 +480,6 @@ internal class SonyPtpTransport private constructor(
     captureProbeAttempts = 0
     loggedSettleWait = false
     loggedObjectInMemory = Long.MIN_VALUE
-    propDescMisses = 0
     loggedCaptureReadFailure = false
     captureStartedAt = SystemClock.elapsedRealtime()
 
@@ -542,7 +489,7 @@ internal class SonyPtpTransport private constructor(
 
     // 开拍前先把相机内存里遗留的旧照片读走：不清的话这一枪读回来的会是上一张。
     // 只试一次：读不到就是读不到（相机不在"有货"状态），绝不为此在拍之前耗掉 20 秒。
-    val stale = runCatching { readPropDescCurrent(PROPERTY_OBJECT_IN_MEMORY) }
+    val stale = runCatching { readPropertyValue(PROPERTY_OBJECT_IN_MEMORY) }
       .onFailure { noteCaptureReadFailure("pre-capture D215", it) }
       .getOrNull()
     if (stale != null && stale >= 0x8000) {
@@ -562,7 +509,7 @@ internal class SonyPtpTransport private constructor(
     val focusDeadline = SystemClock.elapsedRealtime() + CAPTURE_PRESS_HOLD_MS
     while (SystemClock.elapsedRealtime() < focusDeadline) {
       if (lastEventCode == 0xC201) break
-      val focus = runCatching { readPropDescCurrent(PROPERTY_FOCUS_FOUND) }
+      val focus = runCatching { readPropertyValue(PROPERTY_FOCUS_FOUND) }
         .onFailure { noteCaptureReadFailure("D213", it) }
         .getOrNull()
       if (focus != null && focus >= 2L) {
@@ -677,33 +624,15 @@ internal class SonyPtpTransport private constructor(
   }
   fun pollCapturedJpeg(): ByteArray? {
     if (capturedObjectConsumed) return null
-
-    // 取景期间绝不发属性读取！
-    // 真机实测（ILCE-7M2）：取景流跑起来之后发 0x1014，机身不回包，5s×5 次重试后
-    // `USB write failed`，整条链路报废、只能重插。取景那一侧只允许 0x1009 一件事。
+    // 取景期间不发属性读取：那一侧只允许 0x1009 一条事务。
     // 快门流程会先把取景停掉（控制器里 stopLiveView 会等帧线程退出），这里才安全。
     if (!captureInProgress) return null
 
-    // Sony 的"这一张可以取了"信号就是 D215(ObjectInMemory)：>= 0x8000 表示相机内存里
-    // 有对象，句柄固定是 0xFFFFC001。这条属性老机身也能用 0x1014 读到，所以优先走它。
-    val viaPropDesc = runCatching { readPropDescCurrent(PROPERTY_OBJECT_IN_MEMORY) }
+    // Sony 的"这一张可以取了"信号是 D215(ObjectInMemory)：>= 0x8000 表示相机内存里有对象，
+    // 句柄固定是 0xFFFFC001。这条属性只能从 0x9209 的属性数组里读（见 readPropertyValue）。
+    val objectInMemory = runCatching { readPropertyValue(PROPERTY_OBJECT_IN_MEMORY) }
       .onFailure { noteCaptureReadFailure("poll D215", it) }
       .getOrNull()
-    if (viaPropDesc == null) {
-      propDescMisses += 1
-    } else {
-      propDescMisses = 0
-    }
-    // 只在机身**没有** D215 的时候才退回 0x9209 大容器。
-    // 有 D215 却读不到 = 相机还在写卡（回 DeviceBusy），继续等就行；
-    // 千万别改发 0x9209 —— 真机上那一步直接 `USB write failed`，链路报废要重插。
-    val hasVendorD215 = sonyVendorCodes.properties.contains(PROPERTY_OBJECT_IN_MEMORY)
-    val objectInMemory = viaPropDesc
-      ?: if (!hasVendorD215 && propDescMisses >= 2) {
-        SonyPtpProperties.scalar(readDeviceProperties(), PROPERTY_OBJECT_IN_MEMORY)
-      } else {
-        null
-      }
 
     if (objectInMemory != null) {
       if (objectInMemory != loggedObjectInMemory) {
@@ -712,25 +641,19 @@ internal class SonyPtpTransport private constructor(
       }
       // 没到 0x8000 之前读虚拟句柄会被固件当成非法访问（真机踩到过：整条 USB 打死）
       if (objectInMemory < 0x8000) return null
-      if (!captureInProgress && objectInMemory < 0x8001) return null
       trace("Sony captured-object ready D215=0x%04X".format(objectInMemory))
       val payload = getObjectPayload(HANDLE_CAPTURED_IMAGE) ?: return null
       capturedObjectConsumed = true
       captureInProgress = false
       return payload
     }
-
-    // D215 这条路走不通，但要分清两种情况：
-    //   1) 机身支持 D215（0x9202 的清单里有），只是这一秒读不到 —— 多半是相机在写卡时回
-    //      DeviceBusy(0x2019)。这种时候**绝不能**改去盲读 0xFFFFC001：对象还没准备好，
-    //      固件会直接把链路打死（真机：`USB write failed`，只能重插）。安静等下一轮。
-    //   2) 机身根本没有 D215（早期固件）：才退回"事件 + 定时试读"的老办法。
+    // 到这里说明 0x9209 没能给出一条可读的 D215（相机可能正忙、或者这台机身根本没有这条属性）。
+    // 只要 0x9202 的清单里有 D215，就只当成"还没好"，继续等 —— 盲读 0xFFFFC001 会把链路打死。
     if (sonyVendorCodes.properties.contains(PROPERTY_OBJECT_IN_MEMORY)) return null
 
     // 没有 D215 的机身（早期固件）：退回事件 + 定时试读虚拟句柄。
     //   1) 绝不能调 GetObjectHandles —— 它虽然被声明支持，但会静默挂死整条 USB；
     //   2) 也不能刚按完快门就去读虚拟句柄 —— 相机还在写卡，固件会卡住不回包。
-    // 取景线程也会调到这里：没有按快门就安静返回，别把"没有新照片"当成联机失败。
     if (!captureInProgress) return null
 
     // 相机通过中断端点推过 ObjectAdded(0xC201) 的话，参数里就是新对象的真实句柄。

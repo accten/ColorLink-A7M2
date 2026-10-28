@@ -37,23 +37,45 @@ internal object SonyPtpProperties {
   /** Guards against a corrupt count field turning into a multi-gigabyte allocation. */
   private const val MAX_ARRAY_ELEMENTS = 65_536
 
-  fun parseAll(data: ByteArray): List<SonyDeviceProperty> {
+  fun parseAll(data: ByteArray): List<SonyDeviceProperty> = scan(data).parsed
+
+  /**
+   * Walks the array and reports where it stopped.
+   *
+   * A body whose blob does not fit the documented layout used to yield an empty list with no
+   * explanation, which is indistinguishable from "the camera has no properties". The caller
+   * needs the offset and the surrounding bytes to fix the layout, so return them.
+   */
+  fun scan(data: ByteArray): SonyPropBlobScan {
     val reader = SonyPtpReader(data)
     val properties = ArrayList<SonyDeviceProperty>()
+    var declared = 0L
     return try {
-      val declared = reader.u64()
+      declared = reader.u64()
       val count = if (declared < 0 || declared > MAX_ELEMENTS) MAX_ELEMENTS.toLong() else declared
       var index = 0L
       while (index < count && reader.remaining() > 0) {
         properties.add(parseRecord(reader))
         index += 1
       }
-      properties
+      SonyPropBlobScan(declared, properties, null, -1, "")
     } catch (error: SonyPtpParseException) {
-      // A truncated payload still carries every record that preceded the truncation.
-      // Returning them is strictly better than discarding a valid prefix.
-      properties
+      val at = reader.position()
+      SonyPropBlobScan(
+        declared = declared,
+        parsed = properties,
+        failure = error.message,
+        failureOffset = at,
+        window = hexWindow(data, at),
+      )
     }
+  }
+
+  private fun hexWindow(data: ByteArray, at: Int): String {
+    val from = (at - 8).coerceAtLeast(0)
+    val to = (at + 24).coerceAtMost(data.size)
+    if (from >= to) return ""
+    return data.copyOfRange(from, to).joinToString("") { "%02X".format(it) }
   }
 
   fun find(properties: List<SonyDeviceProperty>, code: Int): SonyDeviceProperty? =
@@ -155,6 +177,16 @@ internal data class SonyDeviceProperty(
 
 internal class SonyPtpParseException(message: String) : Exception(message)
 
+/** Result of walking a `0x9209` payload: what parsed, and where it stopped if it did not. */
+internal data class SonyPropBlobScan(
+  val declared: Long,
+  val parsed: List<SonyDeviceProperty>,
+  val failure: String?,
+  val failureOffset: Int,
+  /** Hex around the failure offset, so a wrong layout can be diagnosed from a log line. */
+  val window: String,
+)
+
 /**
  * Little-endian cursor over a PTP payload.
  *
@@ -164,6 +196,9 @@ internal class SonyPtpParseException(message: String) : Exception(message)
  */
 internal class SonyPtpReader(private val data: ByteArray, private var offset: Int = 0) {
   fun remaining(): Int = data.size - offset
+
+  /** Current cursor position, for diagnostics when a record cannot be decoded. */
+  fun position(): Int = offset
 
   fun u8(): Int = read(1) { data[it].toInt() and 0xFF }
 

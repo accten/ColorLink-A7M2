@@ -36,27 +36,6 @@ export interface ProbePreset {
 
 export const PROBE_PRESETS: ProbePreset[] = [
   {
-    id: 'prop-d215',
-    label: '读 D215 内存对象 0x1014',
-    op: 0x1014,
-    params: [0xd215],
-    hint: 'A7M2 的"可以取图了"信号：>= 0x8000 表示 0xFFFFC001 里有照片',
-  },
-  {
-    id: 'prop-d215-sony',
-    label: '读 D215 内存对象 0x9203',
-    op: 0x9203,
-    params: [0xd215],
-    hint: 'Sony 自家的属性描述操作；万一标准的 0x1014 在这台机身上没用就来这条',
-  },
-  {
-    id: 'prop-d213',
-    label: '读 D213 对焦状态 0x1014',
-    op: 0x1014,
-    params: [0xd213],
-    hint: '半按快门后 2/3 表示合焦，机身允许全按',
-  },
-  {
     id: 'half-press',
     label: '半按快门 0xD2C1 = 2',
     op: 0x9207,
@@ -76,7 +55,7 @@ export const PROBE_PRESETS: ProbePreset[] = [
     label: '全部属性 0x9209',
     op: 0x9209,
     params: [],
-    hint: 'A7M2 会回 ~1118 字节；我们的解析器解不出属性，靠这段 hex 反推容器格式',
+    hint: '唯一可用的属性通道：D215/D213 都藏在这份属性数组里（A7M2 约 1118 字节）',
   },
   {
     id: 'root-handles',
@@ -197,6 +176,10 @@ export const CAPTURE_DESTINATION_PROBES: ProbePreset[] = [
   { id: 'dest-host', label: '回传目标 0xD222 = 1（host）', op: 0x9205, params: [0xd222], dataHex: '0100', hint: '写属性；成功后再拍一张，看 0xFFFFC001 是否回数据' },
   { id: 'dest-both', label: '回传目标 0xD222 = 2（both）', op: 0x9205, params: [0xd222], dataHex: '0200', hint: '若 1 无效再试 2' },
   { id: 'dest-card', label: '回传目标 0xD222 = 0（只存卡）', op: 0x9205, params: [0xd222], dataHex: '0000', hint: '恢复默认' },
+  // 属性描述里这台机身的枚举值是 [1, 17, 16]，默认 17。libgphoto2 从不写它，
+  // 说明默认值就能拿到内存对象；但如果我们之前写过 0/1/2（2 是非法值），就得写回去。
+  { id: 'dest-17', label: '回传目标 0xD222 = 17（默认）', op: 0x9205, params: [0xd222], dataHex: '1100', hint: '出厂默认值，写回去最安全' },
+  { id: 'dest-16', label: '回传目标 0xD222 = 16', op: 0x9205, params: [0xd222], dataHex: '1000', hint: '另一个合法枚举值' },
 ];
 /**
  * 取图句柄实验。
