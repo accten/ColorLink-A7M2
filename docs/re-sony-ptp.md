@@ -136,3 +136,82 @@ SonyPtpGetObjectHandlesAction.exec(io):
 1. `0x923B(1)` 的返回里数出 dir handle 的布局（count + handles？）
 2. `0x923C` 的返回里定位文件名/大小/格式/句柄字段
 3. 用 `0x923D` 分块读最新一张，落盘后走现有 ingest/调色/导出链路
+
+---
+
+## 决定性证据：Sony 的「拍进内存缓存再回传」路径（有公开参考实现）
+
+像素蛋糕的静态代码只能看到 `0x923B/0x923D` 那套"读卡里已有照片"的路径，
+但 A7M2 的**实时回传**其实走的是 Sony 自己另一条更简单的路：把照片拍进相机的
+内存缓存，再从虚拟句柄 `0xFFFFC001` 整读。这条路在 libgphoto2 里有完整实现，
+而且它明确列了我们的机身：
+
+```
+camlibs/ptp2/library.c:
+  {"Sony:ILCE-7M2 (Control)", 0x054c, 0x0a6a, PTP_CAP|PTP_CAP_PREVIEW}
+  ...
+  if (VendorExtensionID == PTP_VENDOR_SONY &&
+      ptp_operation_issupported(PTP_OC_SONY_SDIO_ControlDevice /*0x9207*/))
+        return camera_sony_capture(...);
+```
+
+`0x054c:0x0a6a` 就是我们在真机上看到的 A7M2 USB ID —— 也就是说这条路径不是猜的，
+是同一具机身在一个成熟实现里被长期验证过的。
+
+### 联机阶段：`0x9202` 必须按 PTP 3.00 请求
+
+```
+0x9201 SDIO_Connect(phase=1, 0, 0)
+0x9201 SDIO_Connect(phase=2, 0, 0)
+0x9202 SDIO_GetExtDeviceInfo(param1 = 0x012C /*PTP 3.00*/, param2 = 1)   // 可重试，直到有数据
+0x9201 SDIO_Connect(phase=3, 0, 0)
+0x9205 SetExtDevicePropValue(0xD25A PriorityMode = 1 /*application*/)
+```
+
+`0x9202` 的返回体：
+
+```
+UINT16   协议版本
+AUINT16  设备属性码（UINT32 count + N×UINT16）
+AUINT16  控制项码（UINT32 count + N×UINT16）
+```
+
+每个码按高 3 位分类：`0x1000` 操作 / `0x4000` 事件 / `0x5000` 属性。
+**这就是 A7M2 `DeviceInfo` 里 `properties=0` 的原因**：我们原来传的是 `0x00C8`（PTP 2.00），
+机身按 200 回包，扩展清单是空的；改成 `0x012C` 之后，`0xD215 / 0xD213 / 0xD2C1 / 0xD2C2`
+这些码才会出现在能力表里。
+
+### 拍照 + 回传：完整序列
+
+```
+1) 清缓存：0x1014 GetDevicePropDesc(0xD215)  ≥ 0x8000 时先把 0xFFFFC001 读走丢掉
+2) 半按：  0x9207 param=0xD2C1, data=u16 2
+3) 全按：  0x9207 param=0xD2C2, data=u16 2
+4) 停住：  最多 1s，等 0xC201 事件或 0xD213(FocusFound) ∈ {2,3}
+5) 松开：  0x9207 param=0xD2C2 → 1，然后 0xD2C1 → 1
+6) 等就绪：轮询 0x1014 GetDevicePropDesc(0xD215)，直到 ≥ 0x8000
+7) 取图：  0x1009 GetObject(0xFFFFC001)   // 整读，data 段就是文件字节
+```
+
+`0xD215` 只有 `0x1014` 这条读法在 A7M2 上可靠：
+`0x9209` 那个 ~1118 字节的属性大容器在这具机身上解不出条目，
+而 `0x1014` 逐条问是有回的。
+
+### 我们之前为什么取不到
+
+| 症状 | 真正原因 |
+| --- | --- |
+| `0x1009 @ 0xFFFFC001` → `0x2001` + 0 字节 | 相机内存里根本没有对象：只发了全按、没发半按，机身也没进"拍摄中"状态 |
+| `0x1008 @ 0xFFFFC001` 挂 20s 打死链路 | 同上；对象不存在时访问虚拟句柄，固件直接不回包 |
+| `0x101B` 一按下去就断链 | 这台机身不支持分块读虚拟句柄，`0x1009` 整读才是正路 |
+| `0xD222 = 1/2` 相机接受但不交图 | `0xD222 CaptureTarget` 的合法取值是 `{1,16,17}`，`2` 是无效值；而且回传根本不靠它 |
+| 设备能力表里 `properties=0` | `0x9202` 请求的是 PTP 2.00（`0x00C8`），扩展清单为空 |
+
+> 早期我们据"像素蛋糕不发半按"推断"半按会让 A7M2 卡在半按态"，
+> 这条推断是**错的**：正确顺序是先半按再全按、最后按相反顺序松开，缺了前半段就永远没有内存对象。
+
+### 其他
+
+- 回传文件可能是 RAW(ARW)：TIFF 容器里没有 `FF D8`，
+  所以取回的数据不能再假设是 JPEG，要按魔数判断（JPEG / ARW 的 `II*\0`）。
+- 中止/失败后不要指望机身自己清理缓存：`0xD215` 还在 `0x8000` 以上时下一枪会读到上一张。

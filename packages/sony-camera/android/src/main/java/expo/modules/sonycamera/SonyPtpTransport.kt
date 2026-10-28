@@ -269,9 +269,10 @@ internal class SonyPtpTransport private constructor(
     var versionData: ByteArray? = null
     // 先按 libgphoto2 的请求值（0x12C, 1）：只有这个版本号才会交回扩展清单。
     // 万一这具机身不认，退回我们以前用的 0x00C8，保证联机本身不会失败。
-    for (request in arrayOf(intArrayOf(SONY_PROTOCOL_EXTENDED, 1), intArrayOf(0x00C8))) {
+    val extInfoRequests = listOf(intArrayOf(SONY_PROTOCOL_EXTENDED, 1), intArrayOf(0x00C8))
+    for (request in extInfoRequests) {
       for (attempt in 0 until 3) {
-        val info = execute(request, expectsData = true, allowBusy = true)
+        val info = execute(0x9202, request, expectsData = true, allowBusy = true)
         if (info.data?.isNotEmpty() == true) {
           versionData = info.data
           break
