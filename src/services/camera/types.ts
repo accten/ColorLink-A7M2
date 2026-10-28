@@ -46,6 +46,19 @@ export interface CameraSnapshot {
   frameSize?: { width: number; height: number };
   battery?: number | null;
   mediaRemaining?: number | null;
+  /**
+   * 只读曝光参数（监看页展示用）。
+   *
+   * A7M2 的 DeviceInfo 不报 Sony 扩展属性，目前这些值大概率拿不到，
+   * 取不到就显示 '—'；能力更强的机身或后续解析出属性容器后会填上。
+   */
+  exposure?: {
+    shutter?: string;
+    aperture?: string;
+    iso?: string;
+    ev?: string;
+    wb?: string;
+  };
 }
 
 export interface CapturedPhoto {

@@ -45,6 +45,11 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
     AsyncFunction("stopLiveView") { controller.stopLiveView(); controller.statePayload() }
     AsyncFunction("capturePhoto") { controller.capturePhotoBlocking() }
     AsyncFunction("capturePreviewFrame") { controller.capturePreviewFrameBlocking() }
+
+    // 诊断：直接发一条 Sony 厂商操作（逆向取图协议时用）
+    AsyncFunction("probeVendorOp") { operation: Int, params: List<Int>? ->
+      controller.probeVendorOpBlocking(operation, params?.toIntArray() ?: intArrayOf())
+    }
     AsyncFunction("focusAt") { x: Double, y: Double, viewWidth: Double, viewHeight: Double ->
       controller.focusAtBlocking(x, y, viewWidth, viewHeight)
     }

@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import React, { useCallback, useState } from 'react';
-import { Alert, StyleSheet, Switch, TextInput, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
 
 import { eventLog } from '@/core/log';
 import { Button, Card, Hairline, Label, Row, Screen, Segmented, Sheet, T } from '@/design/ui';
@@ -9,6 +9,7 @@ import { color, radius, space, typography } from '@/design/tokens';
 import { logFile, writeTextAtomic } from '@/services/paths';
 import { EXPORT_QUALITY_OPTIONS, EXPORT_SIZE_OPTIONS, exportQualityLabel, exportSizeLabel, maskKey } from '@/services/settings';
 import { isUsbTransportAvailable } from '@/services/camera/usb';
+import { PROBE_PRESETS, formatProbeResult, probeVendorOp, type ProbeResult } from '@/services/camera/sonyProbe';
 import { useAppStore } from '@/state/useAppStore';
 
 // 版本号只有 app.json 一处来源，避免界面上写死后忘了改
@@ -27,6 +28,9 @@ export default function SettingsScreen() {
   const [draftKey, setDraftKey] = useState('');
   const [logSheet, setLogSheet] = useState(false);
   const [logText, setLogText] = useState('');
+  const [probeSheet, setProbeSheet] = useState(false);
+  const [probeBusy, setProbeBusy] = useState(false);
+  const [probeResult, setProbeResult] = useState<ProbeResult | null>(null);
 
   const usbReady = isUsbTransportAvailable();
   const thumbCount = assets.filter((a) => (a.thumbUri ?? '').includes('/thumbs/')).length;
@@ -55,6 +59,16 @@ export default function SettingsScreen() {
       notify('danger', `日志写入失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }, [notify]);
+
+  const runProbe = useCallback(
+    async (op: number, params: number[]) => {
+      setProbeBusy(true);
+      const result = await probeVendorOp(op, params);
+      setProbeResult(result);
+      setProbeBusy(false);
+    },
+    [],
+  );
 
   const previewLogs = useCallback(() => {
     const entries = eventLog.list().slice(-40);
@@ -185,6 +199,12 @@ export default function SettingsScreen() {
             value={`${thumbCount}/${assets.length} 张`}
             hint="列表用 480px 缩略图；原图只在编辑 / 导出时解码"
           />
+          <Hairline />
+          <Row
+            label="Sony 协议探测"
+            hint="逆向取图用：逐条发厂商操作，结果写进事件日志"
+            onPress={() => setProbeSheet(true)}
+          />
         </Card>
       </View>
 
@@ -204,6 +224,35 @@ export default function SettingsScreen() {
         </T>
       </View>
 
+      <Sheet visible={probeSheet} onClose={() => setProbeSheet(false)} title="Sony 协议探测">
+        <T variant="monoMuted" style={{ marginBottom: space.sm }}>
+          逐条点、逐条看：结果会写进事件日志。遇到不回包的操作可能打断 USB 连接，
+          重连一次即可（新版会先自动关旧会话）。
+        </T>
+        <ScrollView style={{ maxHeight: 260 }} showsVerticalScrollIndicator={false}>
+          {PROBE_PRESETS.map((preset) => (
+            <View key={preset.id} style={{ marginBottom: space.md }}>
+              <Button
+                title={`${preset.label}${probeBusy ? ' …' : ''}`}
+                onPress={() => void runProbe(preset.op, preset.params)}
+                variant="secondary"
+                disabled={probeBusy}
+              />
+              <T variant="monoMuted" style={{ marginTop: 4 }}>
+                {preset.hint}
+              </T>
+            </View>
+          ))}
+        </ScrollView>
+        {probeResult ? (
+          <View style={{ marginTop: space.sm }}>
+            <Label>最近一次结果</Label>
+            <T variant="monoMuted" style={{ marginTop: 4, lineHeight: 16 }}>
+              {formatProbeResult(probeResult)}
+            </T>
+          </View>
+        ) : null}
+      </Sheet>
       <Sheet visible={keySheet} onClose={() => setKeySheet(false)} title="DeepSeek API Key">
         <T variant="monoMuted" style={{ marginBottom: space.sm }}>
           从 platform.deepseek.com 获取。Key 只保存在本机安全存储里。

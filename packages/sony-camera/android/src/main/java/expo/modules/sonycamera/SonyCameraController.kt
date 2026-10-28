@@ -517,6 +517,17 @@ internal class SonyCameraController(private val context: Context) {
     }
   }
 
+  /**
+   * 诊断入口：把一条 Sony 厂商操作透传给当前 PTP 会话。
+   * 只用于逆向摸索（取图/属性容器格式），不参与正常业务路径。
+   */
+  fun probeVendorOpBlocking(operation: Int, params: IntArray): Map<String, Any?> {
+    val active = transport
+      ?: return mapOf("ok" to false, "error" to "Sony PTP session is not open (USB only)")
+    val result = active.probeVendorOp(operation, params)
+    trace("probe op=${operation.hex()} params=${params.joinToString { it.hex32() }} result=$result")
+    return result
+  }
   fun focusAtBlocking(x: Double, y: Double, viewWidth: Double, viewHeight: Double): Map<String, Any?> {
     val activeScalar = scalarTransport
       ?: return mapOf("status" to "unsupported", "reason" to "camera_unavailable")

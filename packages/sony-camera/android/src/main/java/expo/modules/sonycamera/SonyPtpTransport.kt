@@ -365,6 +365,50 @@ internal class SonyPtpTransport private constructor(
   }
 
 
+  /**
+   * 诊断用：直接发一条 Sony 厂商操作，把返回码与原始字节（最多 1KB 的 hex）交给 JS。
+   *
+   * 逆向时最有用的一步：0x923B/0x923C/0x923D 这些取图操作的参数与返回结构没有公开文档，
+   * 有了这个入口就能在真机上逐条试，不用每次改 Kotlin 重新打包。
+   *
+   * 注意：机身在遇到不支持的操作时可能**不回包**（USB 读超时、管线需要重连），
+   * 所以它只放在设置页手动触发，不进任何自动流程。
+   */
+  fun probeVendorOp(operation: Int, params: IntArray, readBytes: Boolean = true): Map<String, Any?> {
+    val started = SystemClock.elapsedRealtime()
+    return try {
+      val result = execute(
+        operation,
+        params,
+        expectsData = readBytes,
+        allowBusy = true,
+        acceptedResponses = setOf(
+          RESPONSE_OK,
+          RESPONSE_INVALID_HANDLE,
+          RESPONSE_DEVICE_BUSY,
+          RESPONSE_ACCESS_DENIED,
+          RESPONSE_SESSION_NOT_OPEN,
+          RESPONSE_SESSION_ALREADY_OPEN,
+        ),
+      )
+      val data = result.data
+      linkedMapOf<String, Any?>(
+        "ok" to true,
+        "op" to operation,
+        "code" to result.responseCode,
+        "bytes" to (data?.size ?: 0),
+        "head" to (data?.take(256)?.joinToString("") { "%02X".format(it) } ?: ""),
+        "ms" to (SystemClock.elapsedRealtime() - started),
+      )
+    } catch (error: Throwable) {
+      linkedMapOf<String, Any?>(
+        "ok" to false,
+        "op" to operation,
+        "error" to (error.message ?: error::class.java.simpleName),
+        "ms" to (SystemClock.elapsedRealtime() - started),
+      )
+    }
+  }
   fun close() {
     if (sessionOpen) runCatching { execute(0x1003) }
     sessionOpen = false
