@@ -186,10 +186,17 @@ export const CAPTURE_HANDLE_PROBES: ProbePreset[] = [
   },
   {
     id: 'sony-partial',
-    label: 'Sony 分块 0x923D',
+    label: 'Sony 分块 0x923D (handle 在前)',
     op: 0x923d,
-    params: [1, 0xffffc001, 0, 0x40000],
-    hint: '[cardId, handle, offset, size]',
+    params: [0xffffc001, 0, 0x40000, 1],
+    hint: '参数顺序取自 SonyGetPartialObjectCommand(objHandle, offset, totalSize, cardInfo)',
+  },
+  {
+    id: 'sony-partial-card0',
+    label: 'Sony 分块 0x923D (cardInfo=0)',
+    op: 0x923d,
+    params: [0xffffc001, 0, 0x40000, 0],
+    hint: '同上，cardInfo 用 0 再试一次',
   },
   {
     id: 'info-captured',
