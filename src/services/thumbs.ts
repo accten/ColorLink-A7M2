@@ -56,12 +56,14 @@ export async function backfillThumbnails(
   assets: Asset[],
   limit = 6,
 ): Promise<Asset[]> {
-  // 注意：旧数据里的 thumbUri 可能指向一个已经不存在的旧路径，
-  // 只按"是否等于原图"筛选会把这些永远漏掉，所以还要检查文件是否真的在。
+  // 注意：旧数据里的 thumbUri 可能等于原图，也可能指向一个已经不存在、或者
+  // 根本不是 thumbs/ 目录的路径。这里以「是否真的指向 thumbs/ 下的文件」为准。
   const pending = assets.filter((asset) => {
-    if (!asset.thumbUri) return true;
-    if (asset.thumbUri === asset.uri) return true;
-    return !exists(asset.thumbUri);
+    const thumb = asset.thumbUri;
+    if (!thumb) return true;
+    if (thumb === asset.uri) return true;
+    if (!thumb.includes('/thumbs/')) return true;
+    return !exists(thumb);
   });
   if (!pending.length) return assets;
 
