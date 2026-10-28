@@ -499,9 +499,11 @@ internal class SonyCameraController(private val context: Context) {
     } catch (error: Throwable) {
       val cause = error.cause ?: error
       if (cause is SonyPtpException && isCaptureUnsupported(cause)) {
-        // 快门确实按下去了，只是这台机身不通过 PTP 交照片：保留会话，别把相机踢下线
+        // 快门确实按下去了，只是这台机身不通过 PTP 交照片：保留会话，别把相机踢下线。
+        // 取景在拍之前被停下过一次，这里要接回去，否则用户得重新进一次取景页（真机踩到过）。
         trace("capture unsupported by this body; keeping the PTP session alive")
         updateState("ready", cause.message?.removePrefix(SonyPtpTransport.CAPTURE_UNSUPPORTED_PREFIX)?.trim())
+        if (resumeStream) startLiveView()
         throw cause
       }
       if (cause is SonyPtpException && cause.retryable && scalarTransport != null) {
