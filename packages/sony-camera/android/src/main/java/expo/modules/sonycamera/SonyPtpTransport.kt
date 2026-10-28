@@ -397,7 +397,7 @@ internal class SonyPtpTransport private constructor(
         "op" to operation,
         "code" to result.responseCode,
         "bytes" to (data?.size ?: 0),
-        "head" to (data?.take(256)?.joinToString("") { "%02X".format(it) } ?: ""),
+        "head" to (data?.take(1200)?.joinToString("") { "%02X".format(it) } ?: ""),
         "ms" to (SystemClock.elapsedRealtime() - started),
       )
     } catch (error: Throwable) {

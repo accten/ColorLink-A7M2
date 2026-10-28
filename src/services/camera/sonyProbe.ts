@@ -117,7 +117,8 @@ export async function probeVendorOp(op: number, params: number[]): Promise<Probe
       error: result.error,
       headLength: head.length,
     });
-    const chunk = 200;
+    // 每段 120 字符：eventLog 会把 >=200 字符的纯字母数字串当成 base64 打码
+    const chunk = 120;
     for (let i = 0; i * chunk < head.length; i += 1) {
       eventLog.info('probe.sony.hex', { part: i, hex: head.slice(i * chunk, (i + 1) * chunk) });
     }
@@ -132,6 +133,6 @@ export async function probeVendorOp(op: number, params: number[]): Promise<Probe
 export function formatProbeResult(result: ProbeResult): string {
   if (!result.ok) return `失败：${result.error ?? '未知原因'}（${result.ms ?? 0}ms）`;
   const code = result.code != null ? `0x${result.code.toString(16).toUpperCase()}` : '—';
-  const head = result.head ? result.head.slice(0, 512) : '';
+  const head = result.head ? result.head.slice(0, 1200) : '';
   return `code=${code} bytes=${result.bytes ?? 0} ms=${result.ms ?? 0}${head ? `\n${head}` : ''}`;
 }
