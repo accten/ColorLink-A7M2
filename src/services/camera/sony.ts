@@ -19,7 +19,7 @@ const CONNECT_TIMEOUT_MS = 15000;
  * PTP2 方言里没有 Sony 的取景属性，但我们补了「会话照常保留，只关掉取景」的处理，
  * 于是需要在 JS 侧知道"取景不可用但相机是连着的"。
  */
-type SonyStatePayload = SonyCameraState & { liveViewSupported?: boolean };
+type SonyStatePayload = SonyCameraState & { liveViewSupported?: boolean; fps?: number };
 
 /**
  * 真机 USB 联机（PTP2），基于 expo-sony-camera 原生模块。
@@ -74,6 +74,11 @@ export class SonyCameraTransport implements ICameraTransport {
   private readonly stateListeners = new Set<(s: CameraSnapshot) => void>();
   private readonly photoListeners = new Set<(p: CapturedPhoto) => void>();
   private readonly disposers: (() => void)[] = [];
+
+  /** 上一次记进事件日志的状态：帧率每秒推一次，不能跟着它刷日志 */
+  private lastLoggedState?: string;
+  private lastLoggedMessage?: string;
+  private lastLoggedModel?: string;
 
   constructor() {
     const native = SonyCamera;
@@ -151,15 +156,27 @@ export class SonyCameraTransport implements ICameraTransport {
             deviceProps: Boolean(features.properties ?? false),
           }
         : this.snap.caps,
+      // 原生每秒推一次真实帧率（取景在原生层，JS 看不到帧本身）
+      fps: typeof state.fps === 'number' ? Math.round(state.fps * 10) / 10 : this.snap.fps,
       error: phase === 'error' ? describeError(state) : undefined,
     };
 
-    eventLog.info('camera.state', {
-      state: state.state,
-      phase,
-      model: state.device?.model,
-      message: state.message,
-    });
+    // 帧率每秒都会推一次状态，别让它把事件日志刷满：只有"看得见的"变化才记
+    const changed =
+      state.state !== this.lastLoggedState ||
+      state.message !== this.lastLoggedMessage ||
+      state.device?.model !== this.lastLoggedModel;
+    if (changed) {
+      this.lastLoggedState = state.state;
+      this.lastLoggedMessage = state.message;
+      this.lastLoggedModel = state.device?.model;
+      eventLog.info('camera.state', {
+        state: state.state,
+        phase,
+        model: state.device?.model,
+        message: state.message,
+      });
+    }
 
     for (const listener of this.stateListeners) listener(this.snap);
   }

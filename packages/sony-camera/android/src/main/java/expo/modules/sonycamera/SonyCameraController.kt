@@ -67,6 +67,8 @@ internal class SonyCameraController(private val context: Context) {
   private val permissionRequestPending = AtomicBoolean(false)
   private val liveViewRequested = AtomicBoolean(false)
   private val streaming = AtomicBoolean(false)
+  /** 最近一次统计到的取景帧率（每秒算一次，供界面显示） */
+  @Volatile private var lastFps = 0.0
   @Volatile private var lastScalarDiscoveryFinishedAt = 0L
   private val permissionAction = context.packageName + PERMISSION_ACTION_SUFFIX
   private val diagnosticsPreferences = context.getSharedPreferences(DIAGNOSTICS_PREFERENCE, Context.MODE_PRIVATE)
@@ -427,6 +429,9 @@ internal class SonyCameraController(private val context: Context) {
               lastMetricAt = receivedAt
               lastMetricFrameCount = frameCount
               lastMetricBytes = totalBytes
+              lastFps = fps
+              // 每秒推一次状态就够了：界面顶部要显示真实帧率，但别把 JS 桥当计数器用
+              listeners.forEach { it.onStateChanged(statePayload()) }
             }
           }
         } catch (error: SonyPtpException) {
@@ -453,6 +458,7 @@ internal class SonyCameraController(private val context: Context) {
       }
       scalarTransport?.stopLiveView()
       val elapsedMs = maxOf(1L, SystemClock.elapsedRealtime() - streamStartedAt)
+      lastFps = 0.0
       trace("stream session=$streamSessionId stopped frames=$frameCount elapsedMs=$elapsedMs avgFps=${String.format(Locale.US, "%.2f", frameCount * 1_000.0 / elapsedMs)} maxGapMs=$largestFrameGapMs")
       if (state == "streaming") updateState("ready", "Sony camera is ready.")
     }
@@ -774,6 +780,8 @@ internal class SonyCameraController(private val context: Context) {
     result["diagnostics"] = diagnosticSnapshot()
     // 取景是否可用：true 表示这次会话支持 USB 实时取景（有的机身不支持，但快门/回传正常）
     result["liveViewSupported"] = !liveViewUnsupported
+    // 取景帧率：只在这一秒真的收到帧时才有意义，停流后归零，别让界面停在旧值
+    result["fps"] = if (streaming.get()) lastFps else 0.0
     if (attached != null) {
       result["device"] = mapOf(
         "vendorId" to attached.vendorId,
