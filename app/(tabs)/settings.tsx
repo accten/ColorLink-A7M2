@@ -9,7 +9,7 @@ import { color, radius, space, typography } from '@/design/tokens';
 import { logFile, writeTextAtomic } from '@/services/paths';
 import { EXPORT_QUALITY_OPTIONS, EXPORT_SIZE_OPTIONS, exportQualityLabel, exportSizeLabel, maskKey } from '@/services/settings';
 import { isUsbTransportAvailable } from '@/services/camera/usb';
-import { CAPTURE_DESTINATION_PROBES, PROBE_PRESETS, PROBE_SEQUENCE, formatProbeResult, probeVendorOp, type ProbeResult } from '@/services/camera/sonyProbe';
+import { CAPTURE_DESTINATION_PROBES, CAPTURE_HANDLE_PROBES, PROBE_PRESETS, PROBE_SEQUENCE, formatProbeResult, probeVendorOp, type ProbeResult } from '@/services/camera/sonyProbe';
 import { useAppStore } from '@/state/useAppStore';
 
 // 版本号只有 app.json 一处来源，避免界面上写死后忘了改
@@ -283,6 +283,19 @@ export default function SettingsScreen() {
           回传目标（先写属性，再拍一张看回传）
         </T>
         {CAPTURE_DESTINATION_PROBES.map((preset) => (
+          <Button
+            key={preset.id}
+            title={preset.label}
+            onPress={() => void runProbe(preset.op, preset.params, preset.dataHex)}
+            variant="secondary"
+            disabled={probeBusy}
+            style={{ marginBottom: space.sm }}
+          />
+        ))}
+        <T variant="monoMuted" style={{ marginBottom: 4 }}>
+          取图句柄（拍完后立刻点）
+        </T>
+        {CAPTURE_HANDLE_PROBES.map((preset) => (
           <Button
             key={preset.id}
             title={preset.label}

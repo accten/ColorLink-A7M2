@@ -162,3 +162,40 @@ export const CAPTURE_DESTINATION_PROBES: ProbePreset[] = [
   { id: 'dest-both', label: '回传目标 0xD222 = 2（both）', op: 0x9205, params: [0xd222], dataHex: '0200', hint: '若 1 无效再试 2' },
   { id: 'dest-card', label: '回传目标 0xD222 = 0（只存卡）', op: 0x9205, params: [0xd222], dataHex: '0000', hint: '恢复默认' },
 ];
+/**
+ * 取图句柄实验。
+ *
+ * 现场证据：按完快门后相机推 `ObjectAdded 0xC201 params=0xFFFFC001`，
+ * 但 `0x1009 GetObject(0xFFFFC001)` 回的是 `code=0x2001 bytes=0`（成功但没数据）。
+ * 大对象在 Sony 机身上通常要走分块读（0x101B）或厂商的 0x923D，这里把几种都列出来试。
+ */
+export const CAPTURE_HANDLE_PROBES: ProbePreset[] = [
+  {
+    id: 'partial-captured',
+    label: '分块读回传 0x101B (64KB)',
+    op: 0x101b,
+    params: [0xffffc001, 0, 0x40000],
+    hint: '参数 [handle, offset, size]；若 bytes>0 就是我们要的分块通道',
+  },
+  {
+    id: 'partial-captured-4k',
+    label: '分块读回传 0x101B (4KB)',
+    op: 0x101b,
+    params: [0xffffc001, 0, 0x1000],
+    hint: '小窗口再试一次，排除 size 过大被拒',
+  },
+  {
+    id: 'sony-partial',
+    label: 'Sony 分块 0x923D',
+    op: 0x923d,
+    params: [1, 0xffffc001, 0, 0x40000],
+    hint: '[cardId, handle, offset, size]',
+  },
+  {
+    id: 'get-captured',
+    label: '整读回传 0x1009',
+    op: 0x1009,
+    params: [0xffffc001],
+    hint: '对照：已知回 0x2001 + 0 bytes',
+  },
+];
