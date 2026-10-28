@@ -136,3 +136,14 @@ export function formatProbeResult(result: ProbeResult): string {
   const head = result.head ? result.head.slice(0, 1200) : '';
   return `code=${code} bytes=${result.bytes ?? 0} ms=${result.ms ?? 0}${head ? `\n${head}` : ''}`;
 }
+
+/**
+ * 一键探测序列：每条之前由调用方先重连（A7M2 遇到不支持的操作会把管线打断）。
+ * 顺序按"最可能先挂"的放后面：先试 MTP 切换，再试句柄信息/缩略图/取对象。
+ */
+export const PROBE_SEQUENCE: ProbePreset[] = [
+  { id: 'seq-mtp', label: '切 MTP 0x9212', op: 0x9212, params: [1], hint: 'PTP↔MTP 切换' },
+  { id: 'seq-info', label: '句柄信息 0x923C', op: 0x923c, params: [1, 0], hint: '[cardId, handle]' },
+  { id: 'seq-thumb', label: '缩略图 0x923E', op: 0x923e, params: [1, 0], hint: '[cardAndFileType, handle]' },
+  { id: 'seq-object', label: '取对象 0x923D', op: 0x923d, params: [1, 0, 0, 0x1000], hint: '[cardId, handle, offset, size]' },
+];

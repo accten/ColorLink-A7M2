@@ -9,7 +9,7 @@ import { color, radius, space, typography } from '@/design/tokens';
 import { logFile, writeTextAtomic } from '@/services/paths';
 import { EXPORT_QUALITY_OPTIONS, EXPORT_SIZE_OPTIONS, exportQualityLabel, exportSizeLabel, maskKey } from '@/services/settings';
 import { isUsbTransportAvailable } from '@/services/camera/usb';
-import { PROBE_PRESETS, formatProbeResult, probeVendorOp, type ProbeResult } from '@/services/camera/sonyProbe';
+import { PROBE_PRESETS, PROBE_SEQUENCE, formatProbeResult, probeVendorOp, type ProbeResult } from '@/services/camera/sonyProbe';
 import { useAppStore } from '@/state/useAppStore';
 
 // 版本号只有 app.json 一处来源，避免界面上写死后忘了改
@@ -23,6 +23,7 @@ export default function SettingsScreen() {
   const saveKey = useAppStore((s) => s.saveKey);
   const removeKey = useAppStore((s) => s.removeKey);
   const notify = useAppStore((s) => s.notify);
+  const connectCamera = useAppStore((s) => s.connectCamera);
 
   const [keySheet, setKeySheet] = useState(false);
   const [draftKey, setDraftKey] = useState('');
@@ -31,6 +32,7 @@ export default function SettingsScreen() {
   const [probeSheet, setProbeSheet] = useState(false);
   const [probeBusy, setProbeBusy] = useState(false);
   const [probeResult, setProbeResult] = useState<ProbeResult | null>(null);
+  const [sequenceText, setSequenceText] = useState('');
 
   const usbReady = isUsbTransportAvailable();
   const thumbCount = assets.filter((a) => (a.thumbUri ?? '').includes('/thumbs/')).length;
@@ -60,15 +62,56 @@ export default function SettingsScreen() {
     }
   }, [notify]);
 
+  /** 确保 USB 联机处于 ready/live：断了就重连，最多等 6 秒 */
+  const ensureConnected = useCallback(async () => {
+    const isReady = () => {
+      const phase = useAppStore.getState().camera.phase;
+      return phase === 'ready' || phase === 'live';
+    };
+    if (isReady()) return true;
+    await connectCamera('usb');
+    for (let i = 0; i < 20; i += 1) {
+      if (isReady()) return true;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    return isReady();
+  }, [connectCamera]);
+
   const runProbe = useCallback(
     async (op: number, params: number[]) => {
       setProbeBusy(true);
+      await ensureConnected();
       const result = await probeVendorOp(op, params);
       setProbeResult(result);
       setProbeBusy(false);
     },
+    // ensureConnected 只依赖 store，不需重新创建
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
+
+  /**
+   * 探测序列：每条之前自动确保联机。
+   *
+   * A7M2 对未实现的操作会直接不回包（USB 读超时、管线被打断），之后必须先重连；
+   * 手动一条条点很容易在"已断开"的状态下白试，所以这里统一重连 + 逐条执行 + 汇总。
+   */
+  const runProbeSequence = useCallback(async () => {
+    setProbeBusy(true);
+    const lines: string[] = [];
+    for (const preset of PROBE_SEQUENCE) {
+      const ready = await ensureConnected();
+      if (!ready) {
+        lines.push(`${preset.label}: 未联机，跳过`);
+        continue;
+      }
+      const result = await probeVendorOp(preset.op, preset.params);
+      lines.push(`${preset.label}: ${formatProbeResult(result).replace(/\n/g, ' ')}`);
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    }
+    setSequenceText(lines.join('\n'));
+    setProbeBusy(false);
+  }, [ensureConnected]);
 
   const previewLogs = useCallback(() => {
     const entries = eventLog.list().slice(-40);
@@ -229,7 +272,14 @@ export default function SettingsScreen() {
           逐条点、逐条看：结果会写进事件日志。遇到不回包的操作可能打断 USB 连接，
           重连一次即可（新版会先自动关旧会话）。
         </T>
-        <ScrollView style={{ maxHeight: 260 }} showsVerticalScrollIndicator={false}>
+        <Button
+          title={probeBusy ? '探测中…' : '一键探测序列（自动重连）'}
+          onPress={() => void runProbeSequence()}
+          variant="primary"
+          disabled={probeBusy}
+          style={{ marginBottom: space.md }}
+        />
+        <ScrollView style={{ maxHeight: 240 }} showsVerticalScrollIndicator={false}>
           {PROBE_PRESETS.map((preset) => (
             <View key={preset.id} style={{ marginBottom: space.md }}>
               <Button
@@ -244,6 +294,14 @@ export default function SettingsScreen() {
             </View>
           ))}
         </ScrollView>
+        {sequenceText ? (
+          <View style={{ marginTop: space.sm }}>
+            <Label>序列结果</Label>
+            <T variant="monoMuted" style={{ marginTop: 4, lineHeight: 15 }}>
+              {sequenceText}
+            </T>
+          </View>
+        ) : null}
         {probeResult ? (
           <View style={{ marginTop: space.sm }}>
             <Label>最近一次结果</Label>
