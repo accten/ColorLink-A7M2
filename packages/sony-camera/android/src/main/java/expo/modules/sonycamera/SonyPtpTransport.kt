@@ -20,6 +20,8 @@ internal class SonyPtpTransport private constructor(
   private val usbInterface: UsbInterface,
   private val bulkIn: UsbEndpoint,
   private val bulkOut: UsbEndpoint,
+  /** 中断端点在（0x83）：相机用它推 PTP 事件（例如 ObjectAdded 0xC201） */
+  private val interruptIn: UsbEndpoint?,
   private val trace: (String) -> Unit,
 ) {
   companion object {
@@ -67,8 +69,13 @@ internal class SonyPtpTransport private constructor(
         ?: throw SonyPtpException("The attached Sony device does not expose a PTP interface.")
       var input: UsbEndpoint? = null
       var output: UsbEndpoint? = null
+      var interrupts: UsbEndpoint? = null
       for (index in 0 until target.endpointCount) {
         val endpoint = target.getEndpoint(index)
+        if (endpoint.type == UsbConstants.USB_ENDPOINT_XFER_INT && endpoint.direction == UsbConstants.USB_DIR_IN) {
+          interrupts = endpoint
+          continue
+        }
         if (endpoint.type != UsbConstants.USB_ENDPOINT_XFER_BULK) continue
         if (endpoint.direction == UsbConstants.USB_DIR_IN) input = endpoint
         if (endpoint.direction == UsbConstants.USB_DIR_OUT) output = endpoint
@@ -82,7 +89,8 @@ internal class SonyPtpTransport private constructor(
       trace(
         "USB interface=${target.id} alt=${target.alternateSetting} " +
           "bulkIn=${input?.address?.hex()} max=${input?.maxPacketSize} " +
-          "bulkOut=${output?.address?.hex()} max=${output?.maxPacketSize}",
+          "bulkOut=${output?.address?.hex()} max=${output?.maxPacketSize} " +
+          "interruptIn=${interrupts?.address?.hex()} max=${interrupts?.maxPacketSize}",
       )
       input?.let { clearEndpointHalt(connection, it, trace) }
       output?.let { clearEndpointHalt(connection, it, trace) }
@@ -91,6 +99,7 @@ internal class SonyPtpTransport private constructor(
         target,
         input ?: throw SonyPtpException("Sony PTP bulk input endpoint is missing."),
         output ?: throw SonyPtpException("Sony PTP bulk output endpoint is missing."),
+        interrupts,
         trace,
       )
     }
@@ -126,7 +135,79 @@ internal class SonyPtpTransport private constructor(
    * 取景线程也会周期性调用 `pollCapturedJpeg()`；如果那里也抛这个错，控制器会把它当成
    * 联机失败、把正在跑的取景一起掐掉（真机踩到过：按完快门取景直接停）。
    */
-  @Volatile private var captureInProgress = false
+@Volatile private var captureInProgress = false
+
+  /** PTP 事件回调：code + 参数。取图最关键的 ObjectAdded(0xC201) 会在参数里带对象句柄。 */
+  private val eventListeners = java.util.concurrent.CopyOnWriteArrayList<(Int, IntArray) -> Unit>()
+
+  @Volatile private var eventLoopRunning = false
+  private var eventThread: Thread? = null
+
+  /** 最近一次事件（诊断用） */
+  @Volatile var lastEventCode: Int = 0
+    private set
+  @Volatile var lastEventParams: IntArray = intArrayOf()
+    private set
+
+  fun addEventListener(listener: (Int, IntArray) -> Unit) {
+    eventListeners.add(listener)
+  }
+
+  /**
+   * 起中断端点读线程。
+   *
+   * A7M2 的接口里有第三个端点（0x83，interrupt IN）。相机拍完会把 ObjectAdded 事件推到这里，
+   * 事件参数里就是新对象的句柄 —— 有了句柄才能 0x1009 取图。
+   * 之前我们只读两个 bulk 端点，事件全丢，只能去猜 0xFFFFC001。
+   */
+  fun startEventLoop() {
+    val endpoint = interruptIn ?: run {
+      trace("no interrupt endpoint on this camera; event loop skipped")
+      return
+    }
+    if (eventLoopRunning) return
+    eventLoopRunning = true
+    val thread = Thread({
+      trace("event loop started endpoint=${endpoint.address.hex()} max=${endpoint.maxPacketSize}")
+      val buffer = ByteArray(maxOf(16, endpoint.maxPacketSize))
+      while (eventLoopRunning) {
+        val read = try {
+          connection.bulkTransfer(endpoint, buffer, 0, buffer.size, 1_000)
+        } catch (error: Throwable) {
+          trace("event read failed: ${error.message ?: error::class.java.simpleName}")
+          -1
+        }
+        if (read < 0) {
+          // 没事件时 USB 读会超时，这是正常的；断开时退出
+          if (!eventLoopRunning) break
+          continue
+        }
+        if (read < 12) continue
+        val length = buffer.u32(0).toInt()
+        val type = buffer.u16(4)
+        if (type != 4 || length < 12) continue
+        val code = buffer.u16(6)
+        val paramCount = minOf((length - 12) / 4, 3)
+        val params = IntArray(paramCount) { index -> buffer.u32(12 + index * 4).toInt() }
+        lastEventCode = code
+        lastEventParams = params
+        trace("PTP event code=${code.hex()} params=${params.joinToString { it.hex32() }}")
+        for (listener in eventListeners) {
+          runCatching { listener(code, params) }
+        }
+      }
+      trace("event loop stopped")
+    }, "SonyPtpEvents")
+    thread.isDaemon = true
+    eventThread = thread
+    thread.start()
+  }
+
+  private fun stopEventLoop() {
+    eventLoopRunning = false
+    eventThread?.interrupt()
+    eventThread = null
+  }
 
   /** Populated during [authenticate]; null when the camera refused `GetDeviceInfo`. */
   var deviceInfo: SonyDeviceInfo? = null
@@ -331,6 +412,21 @@ internal class SonyPtpTransport private constructor(
     // 所以先等相机把这张写完，再按固定间隔试读 Sony 的虚拟回传句柄。
     // 取景线程也会调到这里：没有按快门就安静返回，别把"没有新照片"当成联机失败。
     if (!captureInProgress) return null
+
+    // 相机通过中断端点推过 ObjectAdded(0xC201) 的话，参数里就是新对象的真实句柄。
+    // 这是最靠谱的一条路径：A7M2 的 0xFFFFC001 一直回空数据，但事件句柄是标准对象。
+    if (lastEventCode == 0xC201 && lastEventParams.isNotEmpty()) {
+      val handle = lastEventParams[0]
+      trace("capture: object-added event handle=${"%08X".format(handle)}")
+      val fromEvent = getObjectDirect(handle)
+      if (fromEvent != null) {
+        capturedObjectConsumed = true
+        captureInProgress = false
+        lastEventCode = 0
+        lastEventParams = intArrayOf()
+        return fromEvent
+      }
+    }
     val waited = SystemClock.elapsedRealtime() - captureStartedAt
     if (waited < CAPTURE_SETTLE_BEFORE_READ_MS) {
       if (!loggedSettleWait) {
@@ -416,6 +512,7 @@ internal class SonyPtpTransport private constructor(
     }
   }
   fun close() {
+    stopEventLoop()
     if (sessionOpen) runCatching { execute(0x1003) }
     sessionOpen = false
     runCatching { connection.releaseInterface(usbInterface) }

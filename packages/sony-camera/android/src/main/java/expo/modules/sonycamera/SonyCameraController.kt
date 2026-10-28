@@ -299,6 +299,8 @@ internal class SonyCameraController(private val context: Context) {
       next.prepareStillCapture()
       trace("still-capture properties requested")
       transport = next
+      // 读中断端点：相机拍完会推 ObjectAdded(0xC201)，参数里带新对象句柄
+      next.startEventLoop()
       updateState("ready", "Sony camera is ready.")
       return statePayload()
     } catch (error: Throwable) {
