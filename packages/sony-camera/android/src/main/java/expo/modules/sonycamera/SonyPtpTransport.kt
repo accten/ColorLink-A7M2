@@ -117,6 +117,14 @@ internal class SonyPtpTransport private constructor(
   /** 已经试读了几次回传句柄：够了就认命，别让用户干等 35 秒 */
   private var captureProbeAttempts = 0
 
+  /**
+   * 只有刚按过快门才允许报 CAPTURE_UNSUPPORTED。
+   *
+   * 取景线程也会周期性调用 `pollCapturedJpeg()`；如果那里也抛这个错，控制器会把它当成
+   * 联机失败、把正在跑的取景一起掐掉（真机踩到过：按完快门取景直接停）。
+   */
+  @Volatile private var captureInProgress = false
+
   /** Populated during [authenticate]; null when the camera refused `GetDeviceInfo`. */
   var deviceInfo: SonyDeviceInfo? = null
     private set
@@ -259,6 +267,7 @@ internal class SonyPtpTransport private constructor(
 
   fun captureStill() {
     capturedObjectConsumed = false
+    captureInProgress = true
     captureProbeAttempts = 0
     loggedSettleWait = false
     captureStartedAt = SystemClock.elapsedRealtime()
@@ -307,6 +316,8 @@ internal class SonyPtpTransport private constructor(
     //   1) 绝不能调 GetObjectHandles —— 它虽然被声明支持，但会静默挂死整条 USB；
     //   2) 也不能刚按完快门就去读虚拟句柄 —— 相机还在写卡，固件会卡住不回包。
     // 所以先等相机把这张写完，再按固定间隔试读 Sony 的虚拟回传句柄。
+    // 取景线程也会调到这里：没有按快门就安静返回，别把"没有新照片"当成联机失败。
+    if (!captureInProgress) return null
     val waited = SystemClock.elapsedRealtime() - captureStartedAt
     if (waited < CAPTURE_SETTLE_BEFORE_READ_MS) {
       if (!loggedSettleWait) {
@@ -325,10 +336,12 @@ internal class SonyPtpTransport private constructor(
     val jpeg = getObjectDirect(HANDLE_CAPTURED_IMAGE)
     if (jpeg != null) {
       capturedObjectConsumed = true
+      captureInProgress = false
       return jpeg
     }
     captureProbeAttempts += 1
     if (captureProbeAttempts >= MAX_CAPTURE_PROBE_ATTEMPTS) {
+      captureInProgress = false
       // 等也等过了、试也试够了：这台机身就是不在 PTP 里交照片，说清楚，别让用户干等 35 秒。
       throw SonyPtpException(
         "$CAPTURE_UNSUPPORTED_PREFIX the shutter fired, but this body does not hand the image back " +
