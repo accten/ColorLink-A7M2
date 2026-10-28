@@ -43,6 +43,13 @@ export const PROBE_PRESETS: ProbePreset[] = [
     hint: 'A7M2 的"可以取图了"信号：>= 0x8000 表示 0xFFFFC001 里有照片',
   },
   {
+    id: 'prop-d215-sony',
+    label: '读 D215 内存对象 0x9203',
+    op: 0x9203,
+    params: [0xd215],
+    hint: 'Sony 自家的属性描述操作；万一标准的 0x1014 在这台机身上没用就来这条',
+  },
+  {
     id: 'prop-d213',
     label: '读 D213 对焦状态 0x1014',
     op: 0x1014,

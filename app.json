@@ -2,7 +2,7 @@
   "expo": {
     "name": "ColorLink",
     "slug": "a7m2-colorlink",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "colorlink",
@@ -13,7 +13,7 @@
     },
     "android": {
       "package": "app.colorlink.a7m2",
-      "versionCode": 3,
+      "versionCode": 4,
       "adaptiveIcon": {
         "backgroundColor": "#08090A",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -34,8 +34,8 @@
       [
         "expo-media-library",
         {
-          "photosPermission": "允许 ColorLink 读取相册以导出调色结果。",
-          "savePhotosPermission": "允许 ColorLink 把调色结果保存到相册。"
+          "photosPermission": "允许 ColorLink 读取相册以导出调色结果�?,
+          "savePhotosPermission": "允许 ColorLink 把调色结果保存到相册�?
         }
       ],
       "expo-secure-store",

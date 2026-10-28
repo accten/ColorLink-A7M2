@@ -614,6 +614,13 @@ internal class SonyPtpTransport private constructor(
       return payload
     }
 
+    // D215 这条路走不通，但要分清两种情况：
+    //   1) 机身支持 D215（0x9202 的清单里有），只是这一秒读不到 —— 多半是相机在写卡时回
+    //      DeviceBusy(0x2019)。这种时候**绝不能**改去盲读 0xFFFFC001：对象还没准备好，
+    //      固件会直接把链路打死（真机：`USB write failed`，只能重插）。安静等下一轮。
+    //   2) 机身根本没有 D215（早期固件）：才退回"事件 + 定时试读"的老办法。
+    if (sonyVendorCodes.properties.contains(PROPERTY_OBJECT_IN_MEMORY)) return null
+
     // 没有 D215 的机身（早期固件）：退回事件 + 定时试读虚拟句柄。
     //   1) 绝不能调 GetObjectHandles —— 它虽然被声明支持，但会静默挂死整条 USB；
     //   2) 也不能刚按完快门就去读虚拟句柄 —— 相机还在写卡，固件会卡住不回包。
@@ -741,6 +748,27 @@ internal class SonyPtpTransport private constructor(
     expectsData: Boolean = false,
     allowBusy: Boolean = false,
     acceptedResponses: Set<Int> = setOf(RESPONSE_OK),
+  ): PtpResult = synchronized(ioLock) {
+    executeLocked(operation, params, outgoingData, expectsData, allowBusy, acceptedResponses)
+  }
+
+  /**
+   * PTP 事务必须串行：一个 bulk 端点只允许一条事务在飞。
+   *
+   * 取景线程和"按快门/读属性"是两条线程，之前没有互斥 —— 取景那一帧还在读，
+   * 快门线程已经把新命令写下去了，端点立刻回 `-1`，之后整条管线再也收不到响应
+   * （真机复现：取景中按快门 → `USB bulk-IN retry=1 result=-1` → `USB write failed`，
+   * 相机没掉线、只是不再应答，得重插）。
+   */
+  private val ioLock = Any()
+
+  private fun executeLocked(
+    operation: Int,
+    params: IntArray,
+    outgoingData: ByteArray?,
+    expectsData: Boolean,
+    allowBusy: Boolean,
+    acceptedResponses: Set<Int>,
   ): PtpResult {
     // PIMA 15740 and Sony's reference require OpenSession to use transaction 0.
     // The first transaction inside the open session then starts at 1.

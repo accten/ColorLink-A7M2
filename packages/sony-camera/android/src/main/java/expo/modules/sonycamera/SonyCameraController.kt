@@ -459,8 +459,15 @@ internal class SonyCameraController(private val context: Context) {
     if (!preserveRequest) liveViewRequested.set(false)
     streaming.set(false)
     scalarTransport?.stopLiveView()
-    frameFuture?.cancel(false)
+    // 不能只把 future 置空就走人：帧线程可能正卡在 bulkTransfer 里读那一帧。
+    // 那种时候立刻发下一条 PTP 命令会把端点打乱（真机：取景中按快门 →
+    // `USB bulk-IN retry=1 result=-1`，紧接着 `USB write failed`；相机没掉线但不再应答，只能重插）。
+    val pending = frameFuture
     frameFuture = null
+    if (pending != null && !pending.isDone) {
+      runCatching { pending.get(3, TimeUnit.SECONDS) }
+      if (!pending.isDone) pending.cancel(false)
+    }
     if (state == "streaming") updateState("ready", "Sony camera is ready.")
   }
 
