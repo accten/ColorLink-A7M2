@@ -61,6 +61,10 @@ internal class SonyPtpTransport private constructor(
     /** 电量百分比 */
     private const val PROPERTY_BATTERY = 0xD218
 
+    /** 拍摄目标（卡 / host）：枚举 [1, 17, 16]，出厂默认 17 */
+    private const val PROPERTY_CAPTURE_TARGET = 0xD222
+    private const val CAPTURE_TARGET_DEFAULT = 17
+
     /**
      * SDIO_GetExtDeviceInfo(0x9202) 第一个参数：向机身申请 PTP 3.00 扩展协议。
      *
@@ -357,6 +361,16 @@ internal class SonyPtpTransport private constructor(
     // These documented properties select host dial control and still capture.
     runCatching { execute(0x9205, intArrayOf(0xD25A), outgoingData = byteArrayOf(1)) }
     runCatching { execute(0x9205, intArrayOf(0x5013), outgoingData = le32(1)) }
+    // 把"拍摄目标"写回出厂默认值 17。
+    //
+    // 它的枚举是 [1, 17, 16]，默认 17。早期为了"拍完传到 host"我们试过写 1/2/0，
+    // 其中 2 根本不是合法值 —— 机身在收到非法值之后可能就不再往内存缓存里放照片了
+    // （表现就是 0xD215 永远不涨）。这里每次联机都写回默认值，保证从干净状态开拍。
+    // 注意：这不是"选 host"，只是恢复默认；真机取图靠的仍然是 D215 + 0xFFFFC001。
+    runCatching {
+      execute(0x9205, intArrayOf(PROPERTY_CAPTURE_TARGET), outgoingData = le16(CAPTURE_TARGET_DEFAULT))
+      trace("restored D222 capture target to 0x%04X".format(CAPTURE_TARGET_DEFAULT))
+    }.onFailure { trace("could not restore D222 capture target: ${it.message ?: "unknown"}") }
   }
 
   /** One `0x9209` read: the camera's whole property array, or null when it refused. */
