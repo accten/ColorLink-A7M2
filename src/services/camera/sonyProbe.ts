@@ -192,6 +192,13 @@ export const CAPTURE_HANDLE_PROBES: ProbePreset[] = [
     hint: '[cardId, handle, offset, size]',
   },
   {
+    id: 'info-captured',
+    label: '对象信息 0x1008',
+    op: 0x1008,
+    params: [0xffffc001],
+    hint: '先把 ObjectInfo 拉出来；之前没设回传目标时这条会挂，现在值得再试',
+  },
+  {
     id: 'get-captured',
     label: '整读回传 0x1009',
     op: 0x1009,
