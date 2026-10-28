@@ -46,6 +46,21 @@ internal class SonyPtpTransport private constructor(
     /** 全按快门（S2 / SonyStillImage）：0xD2C2 */
     private const val PROPERTY_CAPTURE_BUTTON = 0xD2C2
 
+    // ---- 监视器上那排只读参数（都用 0x9209 的属性数组读） ----
+    /** 快门速度：UINT32，高 16 位分子、低 16 位分母 */
+    private const val PROPERTY_SHUTTER_SPEED = 0xD20D
+    /** 光圈：标准 F-Number，百分之一档 */
+    private const val PROPERTY_F_NUMBER = 0x5007
+    /** ISO：低 24 位是数值，0xFFFFFF 表示自动 */
+    private const val PROPERTY_ISO = 0xD21E
+    private const val PROPERTY_ISO_ALT = 0xD226
+    /** 曝光补偿：千分之一档 */
+    private const val PROPERTY_EXPOSURE_COMPENSATION = 0x5010
+    private const val PROPERTY_EXPOSURE_COMPENSATION_ALT = 0xD224
+    private const val PROPERTY_WHITE_BALANCE = 0x5005
+    /** 电量百分比 */
+    private const val PROPERTY_BATTERY = 0xD218
+
     /**
      * SDIO_GetExtDeviceInfo(0x9202) 第一个参数：向机身申请 PTP 3.00 扩展协议。
      *
@@ -56,6 +71,9 @@ internal class SonyPtpTransport private constructor(
     private const val SONY_PROTOCOL_EXTENDED = 0x012C
     private const val MAX_CONTAINER_BYTES = 100 * 1024 * 1024
     private const val MAX_USB_READ_BYTES = 64 * 1024
+
+    /** 属性轮询连续失败几次就停用（宁可不显示参数，也不能把联机读死） */
+    private const val MAX_EXPOSURE_POLL_FAILURES = 3
 
     /** 一条事务里 bulk-IN 连续失败几次就放弃（属性读取只用 1 次，别为它等 25 秒） */
     private const val MAX_READ_RETRIES = 5
@@ -161,6 +179,11 @@ internal class SonyPtpTransport private constructor(
 
   /** 一次拍摄里只记一次命令失败，否则 100 次轮询会写 100 行日志 */
   private var loggedCaptureReadFailure = false
+
+  /** 属性轮询的熔断：连续失败到上限就彻底停掉（重连后恢复） */
+  private var exposurePollFailures = 0
+
+  @Volatile private var exposurePollingDisabled = false
 
   /** 已经打过日志的成功属性读数 */
   private val propDescObserved = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
@@ -273,6 +296,9 @@ internal class SonyPtpTransport private constructor(
       execute(0x1002, intArrayOf(1))
     }
     sessionOpen = true
+    // 新会话：把属性轮询的熔断复位，否则一次失败会让整场联机都不显示参数
+    exposurePollFailures = 0
+    exposurePollingDisabled = false
     execute(0x9201, intArrayOf(1, 0, 0), expectsData = true)
     execute(0x9201, intArrayOf(2, 0, 0), expectsData = true)
     var versionData: ByteArray? = null
@@ -418,6 +444,62 @@ internal class SonyPtpTransport private constructor(
     PROPERTY_FOCUS_FOUND -> 3 // 0/1 = 未合焦，2/3 = 合焦
     PROPERTY_LIVE_VIEW_STATUS -> 1
     else -> Long.MAX_VALUE
+  }
+
+  /**
+   * 监视器上那排只读参数（快门/光圈/ISO/EV/白平衡/电量）。
+   *
+   * 全部来自同一次 `0x9209`：这台机身的属性只走这一条通道，逐条读会把链路打死。
+   * 返回值一律是"给人看的短字符串"，解不出来的项直接省略，UI 继续显示占位符。
+   */
+  fun readExposureSnapshot(): Map<String, Any?> {
+    // 这条路径每秒都会被监看页问一次。一次读崩不能连累取景，连续几次就自己关掉 ——
+    // 真机上"读属性把链路读死"不是假设，是已经踩过的坑。
+    if (exposurePollingDisabled) return emptyMap()
+    val raw = try {
+      readPropertyBlob()
+    } catch (error: Throwable) {
+      noteExposureFailure(error.message ?: error::class.java.simpleName)
+      return emptyMap()
+    }
+    if (raw == null) {
+      noteExposureFailure("0x9209 returned no property array")
+      return emptyMap()
+    }
+    exposurePollFailures = 0
+    val scan = SonyPtpProperties.scan(raw)
+    tracedPropertyBlob(raw, scan)
+    fun valueOf(vararg codes: Int): Long? {
+      for (code in codes) {
+        SonyPtpProperties.scalar(scan.parsed, code)?.let { return it }
+        SonyPtpProperties.findValueByScan(raw, code, Long.MAX_VALUE)?.let { return it }
+      }
+      return null
+    }
+
+    val snapshot = linkedMapOf<String, Any?>()
+    valueOf(PROPERTY_SHUTTER_SPEED)?.let { SonyExposure.shutterSpeed(it) }?.let { snapshot["shutterSpeed"] = it }
+    valueOf(PROPERTY_F_NUMBER)?.let { SonyExposure.aperture(it) }?.let { snapshot["aperture"] = it }
+    valueOf(PROPERTY_ISO, PROPERTY_ISO_ALT)?.let { SonyExposure.iso(it) }?.let { snapshot["iso"] = it }
+    valueOf(PROPERTY_EXPOSURE_COMPENSATION, PROPERTY_EXPOSURE_COMPENSATION_ALT)
+      ?.let { SonyExposure.exposureCompensation(it) }
+      ?.let { snapshot["exposureCompensation"] = it }
+    valueOf(PROPERTY_WHITE_BALANCE)?.let { SonyExposure.whiteBalance(it) }?.let { snapshot["whiteBalance"] = it }
+    valueOf(PROPERTY_BATTERY)?.let { SonyExposure.batteryPercent(it) }?.let { snapshot["batteryPercent"] = it }
+    snapshot["focusFound"] = valueOf(PROPERTY_FOCUS_FOUND)?.let { it >= 2 } ?: false
+    snapshot["objectInMemory"] = valueOf(PROPERTY_OBJECT_IN_MEMORY)
+    return snapshot
+  }
+
+  /** 属性轮询连续失败几次就停用：宁可不显示参数，也不能把联机读死。 */
+  private fun noteExposureFailure(reason: String) {
+    exposurePollFailures += 1
+    if (exposurePollFailures >= MAX_EXPOSURE_POLL_FAILURES) {
+      exposurePollingDisabled = true
+      trace("disabling property polling after $exposurePollFailures failures: $reason")
+    } else {
+      trace("property poll failed ($exposurePollFailures): $reason")
+    }
   }
 
   /**

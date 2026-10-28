@@ -153,6 +153,29 @@ export type SonyFocusResult = {
   reason?: string;
 };
 
+/**
+ * The read-only values a monitor shows next to the live view.
+ *
+ * Every field is optional: it is filled only when the camera's property array actually
+ * carries that code and the value decodes. An empty object means "no property read
+ * succeeded", which the UI must render as placeholders rather than as zeroes.
+ *
+ * These are strings, not numbers, because a monitor shows exactly what the camera says
+ * ("1/250", "f/2.8", "ISO 400"); turning them back into numbers would only lose the
+ * camera's own rounding.
+ */
+export type SonyExposureSnapshot = {
+  shutterSpeed?: string;
+  aperture?: string;
+  iso?: string;
+  exposureCompensation?: string;
+  whiteBalance?: string;
+  batteryPercent?: number;
+  focusFound?: boolean;
+  /** `>= 0x8000` means the camera holds a captured image ready on handle 0xFFFFC001. */
+  objectInMemory?: number;
+};
+
 export type SonyCameraModuleEvents = {
   onStateChanged: (state: SonyCameraState) => void;
   onDeviceAttached: (state: SonyCameraState) => void;

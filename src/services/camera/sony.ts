@@ -231,6 +231,41 @@ export class SonyCameraTransport implements ICameraTransport {
     for (const listener of this.stateListeners) listener(this.snap);
   }
 
+  /**
+   * 刷新监看页那排只读参数。
+   *
+   * 全部来自原生一次 `0x9209`：这台机身不支持标准的 0x1014，逐条读会把 USB 链路打死。
+   * 失败必须安静：监看中每秒都在调，任何一次失败都不该影响取景或快门。
+   */
+  async refreshExposure(): Promise<void> {
+    const native = SonyCamera;
+    if (!native?.readExposure) return;
+    if (!isConnectedPhase(this.snap.phase)) return;
+    try {
+      const raw = await native.readExposure();
+      const exposure = {
+        shutter: raw.shutterSpeed,
+        aperture: raw.aperture,
+        iso: raw.iso,
+        ev: raw.exposureCompensation,
+        wb: raw.whiteBalance,
+      };
+      const battery = typeof raw.batteryPercent === 'number' ? raw.batteryPercent : this.snap.battery ?? null;
+      const changed =
+        exposure.shutter !== this.snap.exposure?.shutter ||
+        exposure.aperture !== this.snap.exposure?.aperture ||
+        exposure.iso !== this.snap.exposure?.iso ||
+        exposure.ev !== this.snap.exposure?.ev ||
+        exposure.wb !== this.snap.exposure?.wb ||
+        battery !== this.snap.battery;
+      if (!changed) return;
+      this.snap = { ...this.snap, exposure, battery };
+      for (const listener of this.stateListeners) listener(this.snap);
+    } catch (error) {
+      eventLog.warn('camera.exposure.failed', { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
   async startLiveView(): Promise<void> {
     const state = await this.requireModule().startLiveView();
     this.applyState(state);

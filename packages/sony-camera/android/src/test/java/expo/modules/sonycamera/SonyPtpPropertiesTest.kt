@@ -18,9 +18,9 @@ class SonyPtpPropertiesTest {
   @Test
   fun parsesSequentialDpdRecords() {
     val blob = blobOf(
-      record(0xD215, DATATYPE_UINT16, default = 0, current = 0x8001),
-      record(0xD213, DATATYPE_UINT8, default = 0, current = 2),
-      record(0x5013, DATATYPE_UINT32, default = 1, current = 1, form = FORM_ENUMERATION, values = longArrayOf(1, 2, 3)),
+      record(0xD215, DATATYPE_UINT16, factory = 0, currentValue = 0x8001),
+      record(0xD213, DATATYPE_UINT8, factory = 0, currentValue = 2),
+      record(0x5013, DATATYPE_UINT32, factory = 1, currentValue = 1, form = FORM_ENUMERATION, values = longArrayOf(1, 2, 3)),
     )
 
     val scan = SonyPtpProperties.scan(blob)
@@ -35,7 +35,7 @@ class SonyPtpPropertiesTest {
 
   @Test
   fun keepsEarlierRecordsWhenALaterRecordIsTruncated() {
-    val complete = record(0xD215, DATATYPE_UINT16, default = 0, current = 0x8000)
+    val complete = record(0xD215, DATATYPE_UINT16, factory = 0, currentValue = 0x8000)
     val truncated = blobOf(complete).copyOf(8 + complete.size + 3)
 
     val scan = SonyPtpProperties.scan(truncated)
@@ -50,8 +50,8 @@ class SonyPtpPropertiesTest {
   fun reportsWhereTheSequentialWalkStopped() {
     // An unknown datatype has no width, so the walk cannot continue past it.
     val blob = blobOf(
-      record(0x5004, 0x0040, default = 0, current = 0),
-      record(0xD215, DATATYPE_UINT16, default = 0, current = 0x8001),
+      record(0x5004, 0x0040, factory = 0, currentValue = 0),
+      record(0xD215, DATATYPE_UINT16, factory = 0, currentValue = 0x8001),
     )
 
     val scan = SonyPtpProperties.scan(blob)
@@ -66,8 +66,8 @@ class SonyPtpPropertiesTest {
     // This is the ILCE-7M2 situation: the sequential walk dies early, but the record header
     // for D215 is still intact later in the payload.
     val blob = blobOf(
-      record(0x5004, 0x0040, default = 0, current = 0),
-      record(0xD215, DATATYPE_UINT16, default = 0, current = 0x8001),
+      record(0x5004, 0x0040, factory = 0, currentValue = 0),
+      record(0xD215, DATATYPE_UINT16, factory = 0, currentValue = 0x8001),
     )
 
     assertEquals(0x8001L, SonyPtpProperties.findValueByScan(blob, 0xD215, 0x8002))
@@ -77,7 +77,7 @@ class SonyPtpPropertiesTest {
   fun byteScanRejectsValuesOutsideThePlausibleRange() {
     // A property code can appear inside an enumeration list; the value range is what makes a
     // match believable, so an implausible current value must not be reported.
-    val blob = blobOf(record(0xD215, DATATYPE_UINT16, default = 0, current = 0xFFFF))
+    val blob = blobOf(record(0xD215, DATATYPE_UINT16, factory = 0, currentValue = 0xFFFF))
 
     assertNull(SonyPtpProperties.findValueByScan(blob, 0xD215, 0x8002))
   }
@@ -137,8 +137,8 @@ class SonyPtpPropertiesTest {
   private fun record(
     code: Int,
     dataType: Int,
-    default: Long,
-    current: Long,
+    factory: Long,
+    currentValue: Long,
     form: Int = FORM_NONE,
     values: LongArray = longArrayOf(),
   ): ByteArray {
@@ -147,8 +147,8 @@ class SonyPtpPropertiesTest {
     writeU16(out, dataType)
     out.write(0) // GetSet
     out.write(1) // IsEnabled: enabled
-    writeValue(out, dataType, default)
-    writeValue(out, dataType, current)
+    writeValue(out, dataType, factory)
+    writeValue(out, dataType, currentValue)
     out.write(form)
     if (form == FORM_ENUMERATION) {
       writeU16(out, values.size)

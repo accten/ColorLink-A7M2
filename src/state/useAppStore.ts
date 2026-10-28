@@ -56,6 +56,8 @@ interface AppState {
   disconnectCamera: () => Promise<void>;
   startLiveView: () => Promise<void>;
   stopLiveView: () => Promise<void>;
+  /** 刷新监看页的只读曝光参数（内部节流；传输层或页面不做时是空操作） */
+  refreshExposure: () => Promise<void>;
   capture: () => Promise<void>;
   refreshAssets: () => Promise<void>;
   deleteAsset: (id: string) => Promise<void>;
@@ -81,6 +83,9 @@ let transport: ICameraTransport | null = null;
 let detachState: (() => void) | null = null;
 let detachPhoto: (() => void) | null = null;
 let noticeSeq = 0;
+/** 上次刷新曝光参数的时刻：监看页每帧都会问，太密对相机没意义 */
+let lastExposureRefreshAt = 0;
+const EXPOSURE_REFRESH_INTERVAL_MS = 1_500;
 
 const defaultSession = (): EditorSession => ({
   params: { ...DEFAULT_PARAMS },
@@ -261,6 +266,21 @@ export const useAppStore = create<AppState>((set, get) => {
       } catch (error) {
         notify('danger', `无法开始取景：${error instanceof Error ? error.message : String(error)}`);
       }
+    },
+
+    /**
+     * 刷新监看页那排只读参数。
+     *
+     * 传输层自己保证失败安静，这里只做节流：太快没意义（相机属性没变），
+     * 也无法确认它是否影响取景。
+     */
+    refreshExposure: async () => {
+      const active = transport;
+      if (!active?.refreshExposure) return;
+      const now = Date.now();
+      if (now - lastExposureRefreshAt < EXPOSURE_REFRESH_INTERVAL_MS) return;
+      lastExposureRefreshAt = now;
+      await active.refreshExposure();
     },
 
     stopLiveView: async () => {

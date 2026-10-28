@@ -30,6 +30,7 @@ export default function LiveScreen() {
   const capturing = useAppStore((s) => s.capturing);
   const capture = useAppStore((s) => s.capture);
   const stopLive = useAppStore((s) => s.stopLiveView);
+  const refreshExposure = useAppStore((s) => s.refreshExposure);
 
   const frames = currentLiveFrames();
   const [index, setIndex] = useState(0);
@@ -42,6 +43,18 @@ export default function LiveScreen() {
     const timer = setInterval(() => setIndex((i) => (i + 1) % frames.length), FRAME_INTERVAL_MS);
     return () => clearInterval(timer);
   }, [frames.length]);
+
+  /**
+   * 只读参数轮询（快门/光圈/ISO/EV/白平衡）。
+   *
+   * A7M2 的属性只能整包从 0x9209 读，所以节奏放慢到 2 秒；读不到就保持占位符，
+   * 绝不能因此影响取景 —— 真正的保护在传输层。
+   */
+  useEffect(() => {
+    void refreshExposure();
+    const timer = setInterval(() => void refreshExposure(), 2_000);
+    return () => clearInterval(timer);
+  }, [refreshExposure]);
 
   const close = () => {
     void stopLive();

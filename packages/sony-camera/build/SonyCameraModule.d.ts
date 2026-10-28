@@ -1,5 +1,5 @@
 import { NativeModule } from 'expo';
-import type { SonyCameraModuleEvents, SonyConnectOptions, SonyDiagnosticsSnapshot, SonyFocusResult, SonyCameraState, SonyPhoto } from './SonyCamera.types';
+import type { SonyCameraModuleEvents, SonyConnectOptions, SonyDiagnosticsSnapshot, SonyFocusResult, SonyExposureSnapshot, SonyCameraState, SonyPhoto } from './SonyCamera.types';
 declare class SonyCameraNativeModule extends NativeModule<SonyCameraModuleEvents> {
     getState(): SonyCameraState;
     connect(options?: SonyConnectOptions): Promise<SonyCameraState>;
@@ -14,6 +14,14 @@ declare class SonyCameraNativeModule extends NativeModule<SonyCameraModuleEvents
      * has arrived yet. It does not emit `onPhotoCaptured`.
      */
     capturePreviewFrame(): Promise<SonyPhoto>;
+    /**
+     * Read-only monitor values (shutter / aperture / ISO / EV / white balance / battery).
+     *
+     * One `0x9209` property-array read, decoded natively. Fields that do not decode are
+     * simply absent, and the result is empty while no camera is connected. Polling this
+     * does not interrupt live view.
+     */
+    readExposure(): Promise<SonyExposureSnapshot>;
     /** 诊断：直接发一条 Sony 厂商操作（逆向取图协议用） */
     probeVendorOp?(operation: number, params?: number[], dataHex?: string): Promise<Record<string, unknown>>;
     /** Android only, and only when the active ScalarWebAPI camera advertises coordinate focus. */

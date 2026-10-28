@@ -49,8 +49,8 @@ export interface CameraSnapshot {
   /**
    * 只读曝光参数（监看页展示用）。
    *
-   * A7M2 的 DeviceInfo 不报 Sony 扩展属性，目前这些值大概率拿不到，
-   * 取不到就显示 '—'；能力更强的机身或后续解析出属性容器后会填上。
+   * A7M2 的属性只能从 `0x9209` 的属性数组里读（它不支持标准的 0x1014），
+   * 取不到就留空，UI 显示 '—'。
    */
   exposure?: {
     shutter?: string;
@@ -79,6 +79,13 @@ export interface ICameraTransport {
   startLiveView(): Promise<void>;
   stopLiveView(): Promise<void>;
   capture(): Promise<{ ok: boolean; error?: CameraError }>;
+  /**
+   * 刷新只读曝光参数。
+   *
+   * 可选：只有真机传输实现得了（演示模式、未来的 Wi-Fi 传输可以不做）。
+   * 实现方必须保证失败时安静返回，绝不因此打断取景。
+   */
+  refreshExposure?(): Promise<void>;
   snapshot(): CameraSnapshot;
   subscribe(listener: (snapshot: CameraSnapshot) => void): () => void;
   onPhoto(listener: (photo: CapturedPhoto) => void): () => void;

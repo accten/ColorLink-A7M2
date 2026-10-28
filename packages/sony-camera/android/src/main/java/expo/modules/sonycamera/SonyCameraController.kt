@@ -54,6 +54,13 @@ internal class SonyCameraController(private val context: Context) {
   private val streamExecutor = Executors.newSingleThreadExecutor { runnable ->
     Thread(runnable, "ExpoSonyStream").apply { isDaemon = true }
   }
+  /**
+   * 属性轮询单独一条线程：取景帧在 [executor] 上长时间占着，排在那条队列里会一直等不到。
+   * 真正的互斥在 transport 的 ioLock 上，这里只保证"不挡住取景"。
+   */
+  private val propertyExecutor = Executors.newSingleThreadExecutor { runnable ->
+    Thread(runnable, "ExpoSonyProps").apply { isDaemon = true }
+  }
   private val listeners = CopyOnWriteArraySet<Listener>()
   private val connecting = AtomicBoolean(false)
   private val scalarReconnectScheduled = AtomicBoolean(false)
@@ -514,8 +521,24 @@ internal class SonyCameraController(private val context: Context) {
     }
   }
 
-  /** One capture attempt: shutter, wait for the transfer, persist the file. */
-  private fun runCaptureStep(): Map<String, Any?> {
+  /**
+   * 监视器上那排只读参数。
+   *
+   * 跑在独立线程上，最多等 6 秒；失败就返回空表，UI 继续显示占位符 —— 这条路径绝不能
+   * 把取景或快门带崩。
+   */
+  fun readExposureBlocking(): Map<String, Any?> {
+    val active = transport ?: return emptyMap()
+    return try {
+      propertyExecutor.submit<Map<String, Any?>> { active.readExposureSnapshot() }.get(6, TimeUnit.SECONDS)
+    } catch (error: Throwable) {
+      val cause = error.cause ?: error
+      trace("read exposure failed: ${cause.message ?: cause::class.java.simpleName}")
+      emptyMap()
+    }
+  }
+
+  /** One capture attempt: shutter, wait for the transfer, persist the file. */  private fun runCaptureStep(): Map<String, Any?> {
     val activeTransport = transport
     val activeScalar = scalarTransport
     if (activeTransport == null && activeScalar == null) throw SonyPtpException("Sony camera is not connected.")

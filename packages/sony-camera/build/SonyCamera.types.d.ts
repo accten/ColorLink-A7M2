@@ -113,6 +113,23 @@ export type SonyFocusResult = {
     status: 'focused' | 'started' | 'failed' | 'unsupported';
     reason?: string;
 };
+/**
+ * Read-only values a monitor shows next to the live view.
+ *
+ * Every field is optional: it is filled only when the camera's property array carries that
+ * code and the value decodes. An empty object means no property read succeeded, which the
+ * UI must render as placeholders rather than as zeroes.
+ */
+export type SonyExposureSnapshot = {
+    shutterSpeed?: string;
+    aperture?: string;
+    iso?: string;
+    exposureCompensation?: string;
+    whiteBalance?: string;
+    batteryPercent?: number;
+    focusFound?: boolean;
+    objectInMemory?: number;
+};
 export type SonyCameraModuleEvents = {
     onStateChanged: (state: SonyCameraState) => void;
     onDeviceAttached: (state: SonyCameraState) => void;
