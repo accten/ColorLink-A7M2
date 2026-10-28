@@ -1,4 +1,4 @@
-param(
+﻿param(
   [string]$Device = '192.168.1.3:38389',
   [string]$Pkg = 'app.colorlink.a7m2'
 )

@@ -56,6 +56,9 @@ internal class SonyPtpTransport private constructor(
     private const val SONY_PROTOCOL_EXTENDED = 0x012C
     private const val MAX_CONTAINER_BYTES = 100 * 1024 * 1024
     private const val MAX_USB_READ_BYTES = 64 * 1024
+
+    /** 一条事务里 bulk-IN 连续失败几次就放弃（属性读取只用 1 次，别为它等 25 秒） */
+    private const val MAX_READ_RETRIES = 5
     private const val USB_TIMEOUT_MS = 5_000
 
 
@@ -64,6 +67,9 @@ internal class SonyPtpTransport private constructor(
 
     /** 两次试读之间的间隔：太密会把 A7M2 的 PTP 打僵 */
     private const val CAPTURE_PROBE_INTERVAL_MS = 1_200L
+
+    /** 等回传时的 D215 轮询间隔（相机在写卡，问太勤它会不回包） */
+    private const val CAPTURE_POLL_INTERVAL_MS = 250L
 
     /** 按住快门等对焦的最长时间（参考实现是 1s） */
     private const val CAPTURE_PRESS_HOLD_MS = 1_000L
@@ -155,6 +161,12 @@ internal class SonyPtpTransport private constructor(
 
   /** 0x1014 连续读不到 D215 的次数：够多就不再用它，避免每次轮询空跑一条命令 */
   private var propDescMisses = 0
+
+  /** 已经打过日志的属性读取失败（"属性/返回码"），避免刷屏 */
+  private val propDescFailures = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+  /** 已经打过日志的成功属性读数 */
+  private val propDescObserved = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
 
   /**
    * 只有刚按过快门才允许报 CAPTURE_UNSUPPORTED。
@@ -349,11 +361,12 @@ internal class SonyPtpTransport private constructor(
    * 老机身（ILCE-7M2）的 `0x9209` 属性大容器解析不出任何条目，但 `0x1014` 逐条问是有回的 ——
    * 上一版就是只走 0x9209，结果 D215/D213 都被判成"这台机身没有"，取图逻辑只能瞎猜。
    */
-  fun readPropDescCurrent(propCode: Int): Long? {
+  fun readPropDescCurrent(propCode: Int, readRetries: Int = 1): Long? {
     val result = execute(
       0x1014,
       intArrayOf(propCode),
       expectsData = true,
+      maxReadRetries = readRetries,
       acceptedResponses = setOf(
         RESPONSE_OK,
         RESPONSE_INVALID_HANDLE,
@@ -361,8 +374,23 @@ internal class SonyPtpTransport private constructor(
         RESPONSE_ACCESS_DENIED,
       ),
     )
-    if (result.responseCode != RESPONSE_OK) return null
-    val data = result.data ?: return null
+    val data = result.data
+    if (result.responseCode != RESPONSE_OK) {
+      // 只打一次（同一属性同一返回码）：真机上"读不到"和"读到了但解析失败"要能分开看
+      val key = "%04X/%04X".format(propCode, result.responseCode)
+      if (propDescFailures.add(key)) {
+        trace(
+          "propdesc 0x%04X code=0x%04X bytes=%d head=%s".format(
+            propCode,
+            result.responseCode,
+            data?.size ?: 0,
+            data?.take(16)?.joinToString("") { "%02X".format(it) } ?: "",
+          ),
+        )
+      }
+      return null
+    }
+    if (data == null) return null
     if (data.size < 7) return null
     val dataType = data.u16(2)
     val size = when (dataType) {
@@ -370,13 +398,36 @@ internal class SonyPtpTransport private constructor(
       0x0003, 0x0004 -> 2 // INT16 / UINT16
       0x0005, 0x0006 -> 4 // INT32 / UINT32
       0x0007, 0x0008 -> 8 // INT64 / UINT64
-      else -> return null
+      else -> {
+        val key = "%04X/type".format(propCode)
+        if (propDescFailures.add(key)) {
+          trace(
+            "propdesc 0x%04X unknown dataType=0x%04X head=%s".format(
+              propCode,
+              dataType,
+              data.take(16).joinToString("") { "%02X".format(it) },
+            ),
+          )
+        }
+        return null
+      }
     }
     val currentOffset = 5 + size
     if (data.size < currentOffset + size) return null
     var value = 0L
     for (index in 0 until size) {
       value = value or ((data[currentOffset + index].toLong() and 0xFFL) shl (8 * index))
+    }
+    if (propDescObserved.add(propCode)) {
+      trace(
+        "propdesc 0x%04X type=0x%04X value=0x%X bytes=%d head=%s".format(
+          propCode,
+          dataType,
+          value,
+          data.size,
+          data.take(16).joinToString("") { "%02X".format(it) },
+        ),
+      )
     }
     return value
   }
@@ -478,13 +529,13 @@ internal class SonyPtpTransport private constructor(
     captureProbeAttempts = 0
     loggedSettleWait = false
     loggedObjectInMemory = Long.MIN_VALUE
+    propDescMisses = 0
     captureStartedAt = SystemClock.elapsedRealtime()
 
-    // 开拍前先把相机内存里遗留的旧照片读走：不清的话这一枪读回来的会是上一张，
-    // 而且机身要等这张取走之后才会报告新对象。
-    repeat(3) {
-      val stale = runCatching { readPropDescCurrent(PROPERTY_OBJECT_IN_MEMORY) }.getOrNull() ?: return@repeat
-      if (stale < 0x8000) return@repeat
+    // 开拍前先把相机内存里遗留的旧照片读走：不清的话这一枪读回来的会是上一张。
+    // 只试一次：读不到就是读不到（相机不在"有货"状态），绝不为此在拍之前耗掉 20 秒。
+    val stale = runCatching { readPropDescCurrent(PROPERTY_OBJECT_IN_MEMORY) }.getOrNull()
+    if (stale != null && stale >= 0x8000) {
       trace("clearing stale in-memory object D215=0x%04X".format(stale))
       runCatching { getObjectPayload(HANDLE_CAPTURED_IMAGE) }
     }
@@ -519,7 +570,8 @@ internal class SonyPtpTransport private constructor(
       } catch (error: SonyPtpException) {
         if (!error.retryable) throw error
       }
-      SystemClock.sleep(100)
+      // 别打得太密：相机在写卡，一条命令接一条会把它逼到不回包。
+      SystemClock.sleep(CAPTURE_POLL_INTERVAL_MS)
     }
     throw SonyPtpException(
       "The shutter fired, but no image came back over PTP. The camera (ILCE-7M2) only hands " +
@@ -597,9 +649,12 @@ internal class SonyPtpTransport private constructor(
     } else {
       propDescMisses = 0
     }
+    // 只在机身**没有** D215 的时候才退回 0x9209 大容器。
+    // 有 D215 却读不到 = 相机还在写卡（回 DeviceBusy），继续等就行；
+    // 千万别改发 0x9209 —— 真机上那一步直接 `USB write failed`，链路报废要重插。
+    val hasVendorD215 = sonyVendorCodes.properties.contains(PROPERTY_OBJECT_IN_MEMORY)
     val objectInMemory = viaPropDesc
-      ?: if (propDescMisses >= 2) {
-        // 0x1014 问不到这条属性就退回 0x9209 大容器，并且别每次轮询都发（会拖慢整个流程）
+      ?: if (!hasVendorD215 && propDescMisses >= 2) {
         SonyPtpProperties.scalar(readDeviceProperties(), PROPERTY_OBJECT_IN_MEMORY)
       } else {
         null
@@ -754,8 +809,9 @@ internal class SonyPtpTransport private constructor(
     expectsData: Boolean = false,
     allowBusy: Boolean = false,
     acceptedResponses: Set<Int> = setOf(RESPONSE_OK),
+    maxReadRetries: Int = MAX_READ_RETRIES,
   ): PtpResult = synchronized(ioLock) {
-    executeLocked(operation, params, outgoingData, expectsData, allowBusy, acceptedResponses)
+    executeLocked(operation, params, outgoingData, expectsData, allowBusy, acceptedResponses, maxReadRetries)
   }
 
   /**
@@ -775,6 +831,7 @@ internal class SonyPtpTransport private constructor(
     expectsData: Boolean,
     allowBusy: Boolean,
     acceptedResponses: Set<Int>,
+    maxReadRetries: Int,
   ): PtpResult {
     // PIMA 15740 and Sony's reference require OpenSession to use transaction 0.
     // The first transaction inside the open session then starts at 1.
@@ -788,7 +845,7 @@ internal class SonyPtpTransport private constructor(
     var data: ByteArray? = null
     while (true) {
       val container = try {
-        readContainer()
+        readContainer(maxReadRetries)
       } catch (error: SonyPtpException) {
         throw SonyPtpException(
           "PTP op ${operation.hex()} tx=$id failed while reading: ${error.message}",
@@ -824,18 +881,18 @@ internal class SonyPtpTransport private constructor(
     }
   }
 
-  private fun readContainer(): PtpContainer {
-    val header = readExact(12)
+  private fun readContainer(maxReadRetries: Int = MAX_READ_RETRIES): PtpContainer {
+    val header = readExact(12, maxReadRetries)
     val length = header.u32(0).toInt()
     if (length < 12 || length > MAX_CONTAINER_BYTES) throw SonyPtpException("Sony returned an invalid PTP container size.")
     val type = header.u16(4)
     val code = header.u16(6)
     val id = header.u32(8).toInt()
-    val payload = if (length == 12) byteArrayOf() else readExact(length - 12)
+    val payload = if (length == 12) byteArrayOf() else readExact(length - 12, maxReadRetries)
     return PtpContainer(type, code, id, payload)
   }
 
-  private fun readExact(size: Int): ByteArray {
+  private fun readExact(size: Int, maxReadRetries: Int = MAX_READ_RETRIES): ByteArray {
     val output = ByteArray(size)
     var offset = 0
     var consecutiveReadFailures = 0
@@ -877,7 +934,7 @@ internal class SonyPtpTransport private constructor(
             "requested=${chunk.size} remaining=${size - offset}",
         )
         clearEndpointHalt(connection, bulkIn, trace)
-        if (consecutiveReadFailures >= 5) {
+        if (consecutiveReadFailures >= maxReadRetries) {
           // Once a PTP transaction has been sent, advancing to a new command
           // after an incomplete read desynchronizes Sony's USB state machine.
           throw SonyPtpException("USB read from Sony camera could not be recovered.")
