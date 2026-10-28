@@ -583,6 +583,12 @@ internal class SonyPtpTransport private constructor(
   fun pollCapturedJpeg(): ByteArray? {
     if (capturedObjectConsumed) return null
 
+    // 取景期间绝不发属性读取！
+    // 真机实测（ILCE-7M2）：取景流跑起来之后发 0x1014，机身不回包，5s×5 次重试后
+    // `USB write failed`，整条链路报废、只能重插。取景那一侧只允许 0x1009 一件事。
+    // 快门流程会先把取景停掉（控制器里 stopLiveView 会等帧线程退出），这里才安全。
+    if (!captureInProgress) return null
+
     // Sony 的"这一张可以取了"信号就是 D215(ObjectInMemory)：>= 0x8000 表示相机内存里
     // 有对象，句柄固定是 0xFFFFC001。这条属性老机身也能用 0x1014 读到，所以优先走它。
     val viaPropDesc = runCatching { readPropDescCurrent(PROPERTY_OBJECT_IN_MEMORY) }.getOrNull()

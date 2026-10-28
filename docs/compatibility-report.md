@@ -308,8 +308,50 @@ camera_capture() 分派：
 §10 那张"不支持"的表依然有效 —— `0x923B/0x9212/0x1007/0x101B` 在这具机身上确实一按就断链，
 只是它们都不是回传的正路。真机结果见 §13。
 
-## 13. 按 Sony 官方序列重写之后的实测（待填）
+## 13. 按 Sony 官方序列重写之后的实测
 
-这一版改动：`0x9202` 请求 PTP 3.00 + 解析扩展清单、半按/全按/反序松开、
-`0xD215` 走 `0x1014`、取回数据按魔数识别格式、开拍前清内存缓存。
-诊断日志里会打印扩展清单（`Sony vendor codes ops/props/events`）与每次 `D215` 变化。
+### 第一轮（v0.1.3 构建前，OPPO Find X8 Ultra + ILCE-7M2）：联机成功，取图被并发打断
+
+`0x9202 (0x12C, 1)` 这一条立即见效 —— 机身回了 86 字节扩展清单，
+`DeviceInfo` 从 `properties=0` 变成 `properties=38`：
+
+```
+Sony extended protocol version=0x00C8 bytes=86
+Sony vendor codes ops=[] props=[0x5004,0x5005,...,0xD213,0xD214,0xD215,...,0xD221,0xD2C1,0xD2C2,...] events=[]
+Sony DeviceInfo model=ILCE-7M2 version=4.0 operations=16 properties=38 events=3
+ops=[0x1001,0x1002,0x1003,0x1004,0x1005,0x1006,0x1007,0x1008,0x1009,0x100A,0x101B,
+     0x9201,0x9202,0x9205,0x9207,0x9209]
+```
+
+即 `0xD213 / 0xD215 / 0xD2C1 / 0xD2C2` 这台机身**全都支持** —— 之前判成"没有"完全是
+请求参数（`0x00C8` 单参数）导致清单为空。
+
+但按下远程快门时链路立刻死掉：
+
+```
+00:31:43.921 state=capturing
+00:31:43.922 PTP send op=0x1014 tx=9 params=0x0000D215
+00:31:43.924 USB bulk-IN retry=1 result=-1 requested=512 remaining=12   ← 2ms 就失败
+... 之后每 5s 重试一次，五个来回 ...
+00:32:05.661 PTP send op=0x1009 tx=37 params=0xFFFFC001
+00:32:05.662 failure SonyPtpException: USB write to Sony camera failed.
+```
+
+相机没有掉线（`dumpsys usb` 里 `/dev/bus/usb/001/007` 一直在，`product_name=ILCE-7M2`），
+只是**再也不应答**。原因是两条线程共用同一个 bulk IN 端点：
+
+- 相机页一打开就在跑取景（`0x1009 @ 0xFFFFC002` 每个帧一次）；
+- 按快门时 `stopLiveView()` 只把 future 置空就走，帧线程可能还卡在 `bulkTransfer` 里；
+- 快门线程紧接着写下一条命令 → 端点当场回 `-1`，之后整条管线错位。
+
+修法两条：
+
+1. `SonyPtpTransport.execute()` 全部串行化（一个 `ioLock`），一个端点同一时刻只允许一条事务；
+2. `stopLiveView()` 先等帧线程退出（最多 3s）再发下一条命令。
+
+顺带修掉一个更危险的分支：`0xD215` 在相机写卡期间读不到（回 `DeviceBusy`）时，
+旧代码会当成"这台机身没有 D215"，转去盲读 `0xFFFFC001` —— 那正是会把固件链路打死的那一步。
+现在只要 `0x9202` 清单里有 `0xD215`，读不到就只是"还没好"，继续等，绝不盲读。
+
+### 第二轮（v0.1.3）：待填
+
