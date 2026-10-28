@@ -215,3 +215,47 @@ AUINT16  控制项码（UINT32 count + N×UINT16）
 - 回传文件可能是 RAW(ARW)：TIFF 容器里没有 `FF D8`，
   所以取回的数据不能再假设是 JPEG，要按魔数判断（JPEG / ARW 的 `II*\0`）。
 - 中止/失败后不要指望机身自己清理缓存：`0xD215` 还在 `0x8000` 以上时下一枪会读到上一张。
+
+### 更正：A7M2 不支持 `0x1014`，属性只能从 `0x9209` 读
+
+上面那条 `0x1014 GetDevicePropDesc(0xD215)` 在**这具机身上一发就把 USB 打死**。
+三次真机复现、连不开取景也一样，最后在相机自己的操作表里找到了答案：
+
+```
+ops=[0x1001,0x1002,0x1003,0x1004,0x1005,0x1006,0x1007,0x1008,0x1009,0x100A,0x101B,
+     0x9201,0x9202,0x9205,0x9207,0x9209]
+```
+
+`0x1014` 不在里面，`0x9203`（Sony 自己的属性描述码，像素蛋糕里叫
+`SonyGetDevicePropDesc`，值 37379）也不在里面。发 `0x1014` 之后端点立刻返回 `-1`，
+之后连 bulk-OUT 都失败，只能重插。
+
+真正可用的属性通道只有一条：`0x9209 SDIO_GetAllExtDevicePropInfo`。
+它返回**整份属性数组**，格式是 Sony 自己的 DPD 记录：
+
+```
+UINT32  元素个数
+UINT32  0
+records...            每条：
+  UINT16 DevicePropCode
+  UINT16 DataType
+  UINT8  GetSet         0x80 位 = 可写控制项
+  UINT8  IsEnabled      0 灰、1 可用、2 只显示
+  <DataType> FactoryDefault
+  <DataType> CurrentValue
+  UINT8  FormFlag       0 无 / 1 范围 / 2 枚举
+        范围：min, max, step
+        枚举：UINT16 个数 + 值…（新版机身还会再跟一份支持列表）
+```
+
+解出 `CurrentValue` 就拿到 `0xD215 / 0xD213`。我们的顺序解析器在这具机身上会因为
+某条记录宽度和文档不一致而整段错位，所以再加一层"按记录头扫字节"的兜底：
+`UINT16 属性码 + 已知宽度的 DataType + 合法取值范围` 三重校验。
+
+### libgphoto2 在这具机身上的行为（可作为对照）
+
+`camera_sony_capture` 的取值顺序与我们现在的实现一致：先清内存缓存、半按、全按、
+等 `0xD213` 或 `0xC201`、反序松开、等 `0xD215 >= 0x8000`、`0x1009(0xFFFFC001)` 整读。
+差别只在属性读取方式：libgphoto2 一直调 `ptp_sony_getalldevicepropdesc`（就是 `0x9209`）
+刷新缓存，再从缓存里取 `0xD215` —— 它压根不依赖 `0x1014` 成功。
+

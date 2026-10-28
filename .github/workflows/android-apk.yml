@@ -123,6 +123,17 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
+      # Kotlin 单测：属性数组 / 对象载荷解析是纯逻辑，不依赖相机或 USB，
+      # 每次构建都跑一遍，免得解析器改动靠"插上相机试"来验证。
+      - name: Native unit tests (sony-camera)
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew :expo-sony-camera:testReleaseUnitTest --no-daemon --stacktrace --max-workers=1 \
+            -PreactNativeArchitectures=arm64-v8a \
+            -Porg.gradle.parallel=false \
+            -Pkotlin.compiler.execution.strategy=in-process
+
       - name: Build release APK (JS bundled, debug-signed)
         run: |
           cd android

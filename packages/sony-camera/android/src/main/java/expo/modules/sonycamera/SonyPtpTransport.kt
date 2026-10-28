@@ -333,30 +333,45 @@ internal class SonyPtpTransport private constructor(
     runCatching { execute(0x9205, intArrayOf(0x5013), outgoingData = le32(1)) }
   }
 
+  /** One `0x9209` read: the camera's whole property array, or null when it refused. */
+  private fun readPropertyBlob(): ByteArray? {
+    val result = execute(0x9209, expectsData = true, allowBusy = true)
+    val raw = result.data
+    if (raw == null || raw.size < 12) return null
+    return raw
+  }
+
   /** Reads and parses every device property the camera currently reports (0x9209). */
   private fun readDeviceProperties(): List<SonyDeviceProperty> {
-    val result = execute(0x9209, expectsData = true, allowBusy = true)
-    val raw = result.data ?: return emptyList()
+    val raw = readPropertyBlob() ?: return emptyList()
     val scan = SonyPtpProperties.scan(raw)
-    if (!tracedPropertyCodes) {
-      tracedPropertyCodes = true
-      val sonyCodes = scan.parsed.map { it.code }.filter { it and 0xFF00 == 0xD200 }
-      trace(
-        "Sony prop blob bytes=${raw.size} declared=${scan.declared} parsed=${scan.parsed.size} " +
-          "failure=${scan.failure ?: "-"} at=${scan.failureOffset} window=${scan.window}",
-      )
-      trace("Sony device properties=${scan.parsed.size} sony=${sonyCodes.joinToString(",") { it.hex() }}")
-      // 整包按 120 字符分段打一次：解析器和这具机身的记录格式对不上时，这是唯一的原始证据
-      val hex = raw.joinToString("") { "%02X".format(it) }
-      var part = 0
-      var index = 0
-      while (index < hex.length) {
-        trace("propblob[$part]=${hex.substring(index, minOf(index + 120, hex.length))}")
-        index += 120
-        part += 1
-      }
-    }
+    tracedPropertyBlob(raw, scan)
     return scan.parsed
+  }
+
+  /**
+   * 第一阶段诊断：整包按 120 字符分段打一次（外加解析器停在哪）。
+   *
+   * eventLog 会把 >=200 字符的纯字母数字串当 base64 打码，所以每段必须短于 200。
+   * 解析器和这具机身的记录格式对不上时，这段 hex 是唯一能离线复盘的证据。
+   */
+  private fun tracedPropertyBlob(raw: ByteArray, scan: SonyPropBlobScan) {
+    if (tracedPropertyCodes) return
+    tracedPropertyCodes = true
+    val sonyCodes = scan.parsed.map { it.code }.filter { it and 0xFF00 == 0xD200 }
+    trace(
+      "Sony prop blob bytes=${raw.size} declared=${scan.declared} parsed=${scan.parsed.size} " +
+        "failure=${scan.failure ?: "-"} at=${scan.failureOffset} window=${scan.window}",
+    )
+    trace("Sony device properties=${scan.parsed.size} sony=${sonyCodes.joinToString(",") { it.hex() }}")
+    val hex = raw.joinToString("") { "%02X".format(it) }
+    var part = 0
+    var index = 0
+    while (index < hex.length) {
+      trace("propblob[$part]=${hex.substring(index, minOf(index + 120, hex.length))}")
+      index += 120
+      part += 1
+    }
   }
 
   /**
@@ -370,17 +385,39 @@ internal class SonyPtpTransport private constructor(
    * 整个 bulk 端点报废、只能重插（三次真机复现）。Sony 自己的 `GetDevicePropDesc`
    * 是厂商码 0x9203，但那也没在支持表里。
    *
-   * 唯一可用的属性通道是 `0x9209 SDIO_GetAllExtDevicePropInfo`：它一次交出整份
-   * 属性数组（这台机身上 1118 字节），再按 Sony 的 DPD 记录格式解出 D215/D213。
+   * 唯一可用的属性通道是 `0x9209 SDIO_GetAllExtDevicePropInfo`：它一次交出整份属性数组
+   * （这台机身上 1118 字节），再按 Sony 的 DPD 记录格式解出 D215/D213。
+   * 顺序解析走不通时（记录宽度和文档不一致会整段错位），退到"按记录头扫字节"。
    */
   fun readPropertyValue(propCode: Int): Long? {
-    val properties = readDeviceProperties()
-    if (properties.isEmpty()) return null
-    val value = SonyPtpProperties.scalar(properties, propCode)
+    val raw = readPropertyBlob() ?: return null
+    val scan = SonyPtpProperties.scan(raw)
+    tracedPropertyBlob(raw, scan)
+    var value = SonyPtpProperties.scalar(scan.parsed, propCode)
+    if (value == null) {
+      value = SonyPtpProperties.findValueByScan(raw, propCode, plausibleMax(propCode))
+      if (value != null) {
+        trace(
+          "prop 0x%04X value=0x%X via byte scan (sequential walk stopped at %d)".format(
+            propCode,
+            value,
+            scan.failureOffset,
+          ),
+        )
+      }
+    }
     if (value != null && propDescObserved.add(propCode)) {
-      trace("prop 0x%04X value=0x%X (from 0x9209)".format(propCode, value))
+      trace("prop 0x%04X value=0x%X".format(propCode, value))
     }
     return value
+  }
+
+  /** 这具机身会给出的合法取值范围：用来把"扫到看起来像的地方"过滤掉。 */
+  private fun plausibleMax(propCode: Int): Long = when (propCode) {
+    PROPERTY_OBJECT_IN_MEMORY -> 0x8002 // 0..1 = 没货，0x8000/0x8001/0x8002 = 缓存里有 N 张
+    PROPERTY_FOCUS_FOUND -> 3 // 0/1 = 未合焦，2/3 = 合焦
+    PROPERTY_LIVE_VIEW_STATUS -> 1
+    else -> Long.MAX_VALUE
   }
 
   /**

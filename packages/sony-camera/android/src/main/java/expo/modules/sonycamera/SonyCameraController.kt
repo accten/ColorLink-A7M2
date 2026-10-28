@@ -487,43 +487,75 @@ internal class SonyCameraController(private val context: Context) {
   fun capturePhotoBlocking(): Map<String, Any?> {
     val resumeStream = liveViewRequested.get() || streaming.get()
     stopLiveView(preserveRequest = true)
-    return try {
-      val result = executor.submit<Map<String, Any?>> {
-      val activeTransport = transport
-      val activeScalar = scalarTransport
-      if (activeTransport == null && activeScalar == null) throw SonyPtpException("Sony camera is not connected.")
-      updateState("capturing", "Capturing on Sony camera…")
-      val jpeg = if (activeScalar != null) {
-        activeScalar.capturePhoto()
-      } else {
-        requireNotNull(activeTransport).captureStill()
-        activeTransport.awaitCapturedJpeg(35_000)
+    var recovered = false
+    while (true) {
+      try {
+        val result = executor.submit<Map<String, Any?>> { runCaptureStep() }.get(45, TimeUnit.SECONDS)
+        if (resumeStream) startLiveView()
+        return result
+      } catch (error: Throwable) {
+        val cause = error.cause ?: error
+        // USB 管线被打死时（真机：相机不再应答，所有 bulk-OUT 都回 -1），
+        // 以前只能让用户拔插线。CloseSession + 重开一次在我们的实测里能救回来，
+        // 所以这里自动试一次；救不回来再报错。
+        if (!recovered && cause is SonyPtpException && isLostUsbLink(cause)) {
+          recovered = true
+          trace("capture lost the USB link: ${cause.message}; reconnecting once and retrying")
+          runCatching {
+            disconnectBlocking(preserveLiveViewRequest = true)
+            connectBlocking()
+          }.onFailure { reconnectError ->
+            trace("reconnect after lost link failed: ${reconnectError.message ?: reconnectError::class.java.simpleName}")
+          }
+          continue
+        }
+        return handleCaptureFailure(cause, resumeStream)
       }
-      val payload = persistCapturedJpeg(jpeg)
-      updateState("ready", "Photo transferred from Sony camera.")
-      payload
-      }.get(45, TimeUnit.SECONDS)
+    }
+  }
+
+  /** One capture attempt: shutter, wait for the transfer, persist the file. */
+  private fun runCaptureStep(): Map<String, Any?> {
+    val activeTransport = transport
+    val activeScalar = scalarTransport
+    if (activeTransport == null && activeScalar == null) throw SonyPtpException("Sony camera is not connected.")
+    updateState("capturing", "Capturing on Sony camera…")
+    val jpeg = if (activeScalar != null) {
+      activeScalar.capturePhoto()
+    } else {
+      requireNotNull(activeTransport).captureStill()
+      activeTransport.awaitCapturedJpeg(35_000)
+    }
+    val payload = persistCapturedJpeg(jpeg)
+    updateState("ready", "Photo transferred from Sony camera.")
+    return payload
+  }
+
+  /** True when the failure is the USB transport dying rather than the camera refusing the shot. */
+  private fun isLostUsbLink(error: SonyPtpException): Boolean {
+    val message = error.message ?: return false
+    return message.contains("USB write to Sony camera failed") ||
+      message.contains("could not be recovered") ||
+      message.contains("bulk-OUT")
+  }
+
+  private fun handleCaptureFailure(cause: Throwable, resumeStream: Boolean): Map<String, Any?> {
+    if (cause is SonyPtpException && isCaptureUnsupported(cause)) {
+      // 快门确实按下去了，只是这台机身不通过 PTP 交照片：保留会话，别把相机踢下线。
+      // 取景在拍之前被停下过一次，这里要接回去，否则用户得重新进一次取景页（真机踩到过）。
+      trace("capture unsupported by this body; keeping the PTP session alive")
+      updateState("ready", cause.message?.removePrefix(SonyPtpTransport.CAPTURE_UNSUPPORTED_PREFIX)?.trim())
       if (resumeStream) startLiveView()
-      result
-    } catch (error: Throwable) {
-      val cause = error.cause ?: error
-      if (cause is SonyPtpException && isCaptureUnsupported(cause)) {
-        // 快门确实按下去了，只是这台机身不通过 PTP 交照片：保留会话，别把相机踢下线。
-        // 取景在拍之前被停下过一次，这里要接回去，否则用户得重新进一次取景页（真机踩到过）。
-        trace("capture unsupported by this body; keeping the PTP session alive")
-        updateState("ready", cause.message?.removePrefix(SonyPtpTransport.CAPTURE_UNSUPPORTED_PREFIX)?.trim())
-        if (resumeStream) startLiveView()
-        throw cause
-      }
-      if (cause is SonyPtpException && cause.retryable && scalarTransport != null) {
-        trace("recoverable Scalar capture failure preserved session: ${cause.message ?: "unknown"}")
-        updateState("ready", "Sony rejected this capture. The camera remains connected; reframe and try again.")
-        if (resumeStream) startLiveView()
-      } else {
-        fail(cause)
-      }
       throw cause
     }
+    if (cause is SonyPtpException && cause.retryable && scalarTransport != null) {
+      trace("recoverable Scalar capture failure preserved session: ${cause.message ?: "unknown"}")
+      updateState("ready", "Sony rejected this capture. The camera remains connected; reframe and try again.")
+      if (resumeStream) startLiveView()
+    } else {
+      fail(cause)
+    }
+    throw cause
   }
 
   /**

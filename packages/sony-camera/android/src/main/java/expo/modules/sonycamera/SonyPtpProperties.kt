@@ -81,6 +81,49 @@ internal object SonyPtpProperties {
   fun find(properties: List<SonyDeviceProperty>, code: Int): SonyDeviceProperty? =
     properties.firstOrNull { it.code == code }
 
+  /**
+   * Last-resort lookup: find one record by walking the payload byte by byte.
+   *
+   * The sequential walk depends on every preceding record decoding at exactly the documented
+   * width. One unknown datatype or one extra enumeration list shifts the cursor and every
+   * following property becomes unreachable - which is what happened on the ILCE-7M2. The
+   * record header itself is still unambiguous, so scan for it, then read the current value at
+   * the offset the header implies.
+   *
+   * A false positive needs all of: the exact 16-bit property code, a datatype with a known
+   * width, room for both values, and a current value inside [maxValue]. Callers pass the range
+   * the property can legitimately hold, which makes a wrong match very unlikely.
+   */
+  fun findValueByScan(data: ByteArray, code: Int, maxValue: Long = Long.MAX_VALUE): Long? {
+    if (data.size < 12) return null
+    val target = code and 0xFFFF
+    var offset = 8
+    while (offset + 6 <= data.size) {
+      val candidate = (data[offset].toInt() and 0xFF) or ((data[offset + 1].toInt() and 0xFF) shl 8)
+      if (candidate == target) {
+        val dataType = (data[offset + 2].toInt() and 0xFF) or ((data[offset + 3].toInt() and 0xFF) shl 8)
+        val width = when (dataType) {
+          0x0001, 0x0002 -> 1
+          0x0003, 0x0004 -> 2
+          0x0005, 0x0006 -> 4
+          0x0007, 0x0008 -> 8
+          else -> 0
+        }
+        // 6 = code(2) + type(2) + getSet(1) + enabled(1); default value sits before current
+        val currentAt = offset + 6 + width
+        if (width in 1..8 && currentAt + width <= data.size) {
+          var value = 0L
+          for (index in 0 until width) {
+            value = value or ((data[currentAt + index].toLong() and 0xFFL) shl (8 * index))
+          }
+          if (value in 0..maxValue) return value
+        }
+      }
+      offset += 1
+    }
+    return null
+  }
+
   /** Convenience for the readiness properties the transport polls (D213, D215, D221). */
   fun scalar(properties: List<SonyDeviceProperty>, code: Int): Long? =
     (find(properties, code)?.currentValue as? Long)
