@@ -143,8 +143,9 @@ export class SonyCameraTransport implements ICameraTransport {
         : this.snap.info,
       caps: state.device
         ? {
-            // 原生明确说取景不可用时，不要假装能取景（实测 ILCE-7M2 就没有 Sony 取景属性）
-            liveView: state.liveViewSupported !== false && Boolean(features.liveView ?? true),
+            // 取景能力以「原生实测」为准：DeviceInfo 里没有 D221 的机身（实测 ILCE-7M2）仍能用
+            // GetObject(0xFFFFC002) 拿到 10fps 的取景帧；liveViewSupported 只在取景真失败时才是 false。
+            liveView: state.liveViewSupported !== false,
             stillCapture: Boolean(features.stillCapture ?? true),
             imageTransfer: Boolean(features.imageTransfer ?? true),
             deviceProps: Boolean(features.properties ?? false),
