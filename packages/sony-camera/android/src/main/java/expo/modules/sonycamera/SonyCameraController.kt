@@ -521,10 +521,10 @@ internal class SonyCameraController(private val context: Context) {
    * 诊断入口：把一条 Sony 厂商操作透传给当前 PTP 会话。
    * 只用于逆向摸索（取图/属性容器格式），不参与正常业务路径。
    */
-  fun probeVendorOpBlocking(operation: Int, params: IntArray): Map<String, Any?> {
+  fun probeVendorOpBlocking(operation: Int, params: IntArray, outgoingData: ByteArray? = null): Map<String, Any?> {
     val active = transport
       ?: return mapOf("ok" to false, "error" to "Sony PTP session is not open (USB only)")
-    val result = active.probeVendorOp(operation, params)
+    val result = active.probeVendorOp(operation, params, outgoingData = outgoingData)
     val opText = "0x%04X".format(operation)
     val paramsText = params.joinToString(",") { "0x%08X".format(it) }
     trace("probe op=$opText params=$paramsText result=$result")

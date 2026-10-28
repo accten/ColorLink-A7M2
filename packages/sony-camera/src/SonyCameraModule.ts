@@ -25,7 +25,7 @@ declare class SonyCameraNativeModule extends NativeModule<SonyCameraModuleEvents
   capturePreviewFrame(): Promise<SonyPhoto>;
 
   /** 诊断：直接发一条 Sony 厂商操作（逆向取图协议用），返回码 + 原始字节 hex */
-  probeVendorOp?(operation: number, params?: number[]): Promise<Record<string, unknown>>;
+  probeVendorOp?(operation: number, params?: number[], dataHex?: string): Promise<Record<string, unknown>>;
   /** Android only, and only when the active ScalarWebAPI camera advertises coordinate focus. */
   focusAt?(x: number, y: number, viewWidth: number, viewHeight: number): Promise<SonyFocusResult>;
   getDiagnostics(): SonyDiagnosticsSnapshot;

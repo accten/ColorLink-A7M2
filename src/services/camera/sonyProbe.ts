@@ -30,6 +30,8 @@ export interface ProbePreset {
   op: number;
   params: number[];
   hint: string;
+  /** 可选：随命令下发的数据（hex 字符串） */
+  dataHex?: string;
 }
 
 export const PROBE_PRESETS: ProbePreset[] = [
@@ -91,13 +93,13 @@ export const PROBE_PRESETS: ProbePreset[] = [
   },
 ];
 
-export async function probeVendorOp(op: number, params: number[]): Promise<ProbeResult> {
+export async function probeVendorOp(op: number, params: number[], dataHex?: string): Promise<ProbeResult> {
   const probe = SonyCamera?.probeVendorOp;
   if (!probe) {
     return { ok: false, op, error: '当前原生模块没有 probeVendorOp（需要重新构建 APK）' };
   }
   try {
-    const raw = (await probe(op, params)) as Record<string, unknown>;
+    const raw = (await probe(op, params, dataHex)) as Record<string, unknown>;
     const result: ProbeResult = {
       ok: Boolean(raw.ok),
       op,
@@ -146,4 +148,17 @@ export const PROBE_SEQUENCE: ProbePreset[] = [
   { id: 'seq-info', label: '句柄信息 0x923C', op: 0x923c, params: [1, 0], hint: '[cardId, handle]' },
   { id: 'seq-thumb', label: '缩略图 0x923E', op: 0x923e, params: [1, 0], hint: '[cardAndFileType, handle]' },
   { id: 'seq-object', label: '取对象 0x923D', op: 0x923d, params: [1, 0, 0, 0x1000], hint: '[cardId, handle, offset, size]' },
+];
+
+/**
+ * 回传目标（CaptureDestination / StillImageStoreDestination）：
+ *
+ * 参考实现里 `SonyCaptureDestination = 0xD222`，与 `SonyStillImageStoreDestination` 同值。
+ * 桌面端 Imaging Edge 的"拍完自动下传到电脑"就是先把这个属性指到 host，再从虚拟句柄取图。
+ * 取值猜测：0 = 只存卡，1 = 存到 host，2 = 两者都要。
+ */
+export const CAPTURE_DESTINATION_PROBES: ProbePreset[] = [
+  { id: 'dest-host', label: '回传目标 0xD222 = 1（host）', op: 0x9205, params: [0xd222], dataHex: '0100', hint: '写属性；成功后再拍一张，看 0xFFFFC001 是否回数据' },
+  { id: 'dest-both', label: '回传目标 0xD222 = 2（both）', op: 0x9205, params: [0xd222], dataHex: '0200', hint: '若 1 无效再试 2' },
+  { id: 'dest-card', label: '回传目标 0xD222 = 0（只存卡）', op: 0x9205, params: [0xd222], dataHex: '0000', hint: '恢复默认' },
 ];

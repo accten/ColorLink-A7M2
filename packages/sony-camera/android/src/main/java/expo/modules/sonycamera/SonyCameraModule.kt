@@ -47,8 +47,13 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
     AsyncFunction("capturePreviewFrame") { controller.capturePreviewFrameBlocking() }
 
     // 诊断：直接发一条 Sony 厂商操作（逆向取图协议时用）
-    AsyncFunction("probeVendorOp") { operation: Int, params: List<Int>? ->
-      controller.probeVendorOpBlocking(operation, params?.toIntArray() ?: intArrayOf())
+    AsyncFunction("probeVendorOp") { operation: Int, params: List<Int>?, dataHex: String? ->
+      val data = dataHex
+        ?.takeIf { it.isNotEmpty() }
+        ?.chunked(2)
+        ?.map { it.toInt(16).toByte() }
+        ?.toByteArray()
+      controller.probeVendorOpBlocking(operation, params?.toIntArray() ?: intArrayOf(), data)
     }
     AsyncFunction("focusAt") { x: Double, y: Double, viewWidth: Double, viewHeight: Double ->
       controller.focusAtBlocking(x, y, viewWidth, viewHeight)

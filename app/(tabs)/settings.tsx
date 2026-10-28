@@ -9,7 +9,7 @@ import { color, radius, space, typography } from '@/design/tokens';
 import { logFile, writeTextAtomic } from '@/services/paths';
 import { EXPORT_QUALITY_OPTIONS, EXPORT_SIZE_OPTIONS, exportQualityLabel, exportSizeLabel, maskKey } from '@/services/settings';
 import { isUsbTransportAvailable } from '@/services/camera/usb';
-import { PROBE_PRESETS, PROBE_SEQUENCE, formatProbeResult, probeVendorOp, type ProbeResult } from '@/services/camera/sonyProbe';
+import { CAPTURE_DESTINATION_PROBES, PROBE_PRESETS, PROBE_SEQUENCE, formatProbeResult, probeVendorOp, type ProbeResult } from '@/services/camera/sonyProbe';
 import { useAppStore } from '@/state/useAppStore';
 
 // 版本号只有 app.json 一处来源，避免界面上写死后忘了改
@@ -78,10 +78,10 @@ export default function SettingsScreen() {
   }, [connectCamera]);
 
   const runProbe = useCallback(
-    async (op: number, params: number[]) => {
+    async (op: number, params: number[], dataHex?: string) => {
       setProbeBusy(true);
       await ensureConnected();
-      const result = await probeVendorOp(op, params);
+      const result = await probeVendorOp(op, params, dataHex);
       setProbeResult(result);
       setProbeBusy(false);
     },
@@ -279,12 +279,25 @@ export default function SettingsScreen() {
           disabled={probeBusy}
           style={{ marginBottom: space.md }}
         />
+        <T variant="monoMuted" style={{ marginBottom: 4 }}>
+          回传目标（先写属性，再拍一张看回传）
+        </T>
+        {CAPTURE_DESTINATION_PROBES.map((preset) => (
+          <Button
+            key={preset.id}
+            title={preset.label}
+            onPress={() => void runProbe(preset.op, preset.params, preset.dataHex)}
+            variant="secondary"
+            disabled={probeBusy}
+            style={{ marginBottom: space.sm }}
+          />
+        ))}
         <ScrollView style={{ maxHeight: 240 }} showsVerticalScrollIndicator={false}>
           {PROBE_PRESETS.map((preset) => (
             <View key={preset.id} style={{ marginBottom: space.md }}>
               <Button
                 title={`${preset.label}${probeBusy ? ' …' : ''}`}
-                onPress={() => void runProbe(preset.op, preset.params)}
+                onPress={() => void runProbe(preset.op, preset.params, preset.dataHex)}
                 variant="secondary"
                 disabled={probeBusy}
               />

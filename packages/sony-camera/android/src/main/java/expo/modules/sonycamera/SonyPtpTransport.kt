@@ -374,12 +374,18 @@ internal class SonyPtpTransport private constructor(
    * 注意：机身在遇到不支持的操作时可能**不回包**（USB 读超时、管线需要重连），
    * 所以它只放在设置页手动触发，不进任何自动流程。
    */
-  fun probeVendorOp(operation: Int, params: IntArray, readBytes: Boolean = true): Map<String, Any?> {
+  fun probeVendorOp(
+    operation: Int,
+    params: IntArray,
+    readBytes: Boolean = true,
+    outgoingData: ByteArray? = null,
+  ): Map<String, Any?> {
     val started = SystemClock.elapsedRealtime()
     return try {
       val result = execute(
         operation,
         params,
+        outgoingData = outgoingData,
         expectsData = readBytes,
         allowBusy = true,
         acceptedResponses = setOf(
