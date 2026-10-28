@@ -177,8 +177,8 @@ npx expo export -p android --output-dir .export-check   # 生产打包（产物�
 | **实时取景** | ✅ | `0x1009 @ 0xFFFFC002` → 124KB/帧、10fps，画面正常显示 |
 | 远程快门 | ✅ 动作 | `0x9207 @ 0xD2C2 (2→1)` 被接受 |
 | 拍完回传 | ❌ | `0xFFFFC001` 返回空数据；按设计提示「照片留在相机卡」 |
-| 缩略图 | ⏳ | 修了补图筛选条件后待复测（build 37） |
-| 按快门后取景是否继续 | ⏳ | 修了取景线程误杀后待复测（build 38） |
+| 缩略图 | ✅ | 设置 → 诊断显示 7/7 张；新拍照片 thumb.ok 4.8KB |
+| 按快门后取景是否继续 | ✅ | CAPTURE_UNSUPPORTED 后 state=ready 并自动 startLiveView，帧率维持 ~9.9fps |
 
 ### 本轮发现并修复的真机缺陷
 

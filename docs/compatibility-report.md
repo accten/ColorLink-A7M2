@@ -167,3 +167,16 @@ A7M2 的方言不符，已全部改掉：
   在 PTP / MTP 之间切换（`0x9212 sonyToggleMtpMode` + `completePtpMtpModeChange` 等事件），
   再走 MTP 的对象列表取图；那条路径的参数是加密的（VM 混淆），需要继续试或抓包。
 - 现阶段产品行为：**联机 + 取景 + 远程快门可用，照片存相机卡**；App 会明确提示而不是假装成功。
+
+## 9. v0.1.2 发布前的最终复测（全部真机，2026-10-28）
+
+| 项目 | 结果 | 证据 |
+|---|---|---|
+| 强停后不拔线直接重连 | ✅ | 先发 `0x1003 CloseSession` → `0x2003 SessionNotOpen`（无害）→ `0x1002` 回 `0x2001` → `state=ready` |
+| 实时取景 | ✅ | `stream metrics frames=51 fps=10.07 avgBytes=79576 maxGapMs=124` |
+| 快门后会话保留 | ✅ | `capture unsupported by this body; keeping the PTP session alive` → `state=ready`（不再 `fail()`） |
+| 快门后取景自动接回 | ✅ | `startLiveView state=ready` → `state=streaming`，随后 `fps=9.88 / 9.97` 持续出帧 |
+| 缩略图 | ✅ | 设置 → 诊断显示 `7/7 张`；新拍照片 `thumb.ok 4791 bytes` |
+
+结论：**联机、取景、远程快门、缩略图、导出、调色都在真机上跑通**；
+唯一未打通的是 A7M2 的 PTP 照片回传（相机在 PC 遥控模式下不交出图像），已在 UI 与文档中如实标注。
