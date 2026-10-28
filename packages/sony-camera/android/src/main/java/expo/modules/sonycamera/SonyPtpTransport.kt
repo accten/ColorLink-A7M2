@@ -54,6 +54,9 @@ internal class SonyPtpTransport private constructor(
     /** PTP 的 SessionAlreadyOpened：上一次会话没正常收尾时，机体就会回这个 */
     private const val RESPONSE_SESSION_ALREADY_OPEN = 0x201E
 
+    /** SessionNotOpen：没有打开的会话时 CloseSession 会回这个 */
+    private const val RESPONSE_SESSION_NOT_OPEN = 0x2003
+
     /** 快门按下去了、但这台机身不通过 PTP 交照片时的错误前缀（上层据此保留会话） */
     internal const val CAPTURE_UNSUPPORTED_PREFIX = "CAPTURE_UNSUPPORTED"
 
@@ -130,6 +133,16 @@ internal class SonyPtpTransport private constructor(
     private set
 
   fun authenticate() {
+    // 上一次会话可能没正常收尾（App 被系统杀掉、装新包、命令超时），机身会认为会话还开着，
+    // 之后 OpenSession 直接不回包，用户只能拔插线。这里在开新会话前先尽力关一次：
+    // 没有会话时它会返回 SessionNotOpen(0x2003)，无害。
+    runCatching {
+      execute(
+        0x1003,
+        acceptedResponses = setOf(RESPONSE_OK, RESPONSE_SESSION_NOT_OPEN),
+      )
+      trace("sent a best-effort CloseSession before opening a new session")
+    }
     val open = execute(
       0x1002,
       intArrayOf(1),

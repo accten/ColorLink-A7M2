@@ -169,13 +169,19 @@ jobs:
             2. 手机上打开安装（首次需允许「安装未知来源应用」）
             3. 或者用 `adb install -r app-release.apk`
 
-            ## 说明
+            ## 这一版有什么
 
-            - 用 Android 调试证书签名，适合自测；不能上架
-            - 只含 `arm64-v8a`，适用于近几年的安卓手机
+            - **真机 USB 联机**：ILCE-7M2 实测可用（PTP2），联机状态、机型、远程快门
+            - **实时取景**：走 Sony 的虚拟取景句柄，实测约 10fps
+            - **手动调色**：12 项参数、10 个预设、3D LUT、AI 一句话调色；支持撤销/重做、按组重置、亮度直方图
+            - **导出**：尺寸可选「原图」、质量可到 100；没做调色时会直接复制原图字节（不重编码）
+
+            ## 已知限制
+
+            - A7M2 在「PC 遥控」模式下**不通过 PTP 回传照片**：快门能拍、照片留在相机卡里，
+              App 会明确提示（取景与远程快门可用）
+            - 只含 `arm64-v8a`；用 Android 调试证书签名，适合自测，不能上架
             - 内置 JS bundle，安装后不依赖电脑；首次启动会进入演示模式
-            - 真机 USB 联机仍需额外接入原生模块（见仓库 docs/sony-transport.md）
-
       - name: Upload build reports on failure
         if: failure()
         uses: actions/upload-artifact@v4

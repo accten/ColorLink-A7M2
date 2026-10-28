@@ -16,6 +16,7 @@ const appVersion = Constants.expoConfig?.version ?? '—';
 
 export default function SettingsScreen() {
   const settings = useAppStore((s) => s.settings);
+  const assets = useAppStore((s) => s.assets);
   const apiKey = useAppStore((s) => s.apiKey);
   const updateSettings = useAppStore((s) => s.updateSettings);
   const saveKey = useAppStore((s) => s.saveKey);
@@ -28,6 +29,7 @@ export default function SettingsScreen() {
   const [logText, setLogText] = useState('');
 
   const usbReady = isUsbTransportAvailable();
+  const thumbCount = assets.filter((a) => (a.thumbUri ?? '').includes('/thumbs/')).length;
 
   const openKeySheet = useCallback(() => {
     setDraftKey('');
@@ -177,6 +179,12 @@ export default function SettingsScreen() {
           <Row label="查看事件日志" hint={`${eventLog.list().length} 条`} onPress={previewLogs} />
           <Hairline />
           <Row label="导出日志到文件" onPress={() => void exportLogs()} />
+          <Hairline />
+          <Row
+            label="缩略图"
+            value={`${thumbCount}/${assets.length} 张`}
+            hint="列表用 480px 缩略图；原图只在编辑 / 导出时解码"
+          />
         </Card>
       </View>
 
