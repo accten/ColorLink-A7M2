@@ -574,8 +574,19 @@ internal class SonyCameraController(private val context: Context) {
   }
 
   private fun persistCapturedJpeg(jpeg: ByteArray, notify: Boolean = true): Map<String, Any?> {
+    val signature = jpeg.take(4).joinToString("") { "%02X".format(it) }
     val bitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
-      ?: throw SonyPtpException("Sony returned an unreadable image.")
+      ?: run {
+        // Sony 的 RAW(ARW) 是 TIFF 容器，BitmapFactory 解不了。说清楚是什么，
+        // 而不是丢一句"unreadable image"让用户以为传输坏了。
+        if (signature == "49492A00" || signature == "4D4D002A") {
+          throw SonyPtpException(
+            "RAW_CAPTURE the camera returned a RAW (ARW) file, which cannot be graded yet. " +
+              "Set the camera's image quality to JPEG (or RAW+JPEG) and shoot again.",
+          )
+        }
+        throw SonyPtpException("Sony returned an unreadable image (signature=$signature, ${jpeg.size} bytes).")
+      }
     val name = "sony-camera-${System.currentTimeMillis()}.jpg"
     val output = File(context.cacheDir, name)
     FileOutputStream(output).use { it.write(jpeg) }

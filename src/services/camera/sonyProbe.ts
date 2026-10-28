@@ -36,6 +36,35 @@ export interface ProbePreset {
 
 export const PROBE_PRESETS: ProbePreset[] = [
   {
+    id: 'prop-d215',
+    label: '读 D215 内存对象 0x1014',
+    op: 0x1014,
+    params: [0xd215],
+    hint: 'A7M2 的"可以取图了"信号：>= 0x8000 表示 0xFFFFC001 里有照片',
+  },
+  {
+    id: 'prop-d213',
+    label: '读 D213 对焦状态 0x1014',
+    op: 0x1014,
+    params: [0xd213],
+    hint: '半按快门后 2/3 表示合焦，机身允许全按',
+  },
+  {
+    id: 'half-press',
+    label: '半按快门 0xD2C1 = 2',
+    op: 0x9207,
+    params: [0xd2c1],
+    dataHex: '0200',
+    hint: '取图前必须先半按：机身要先进"拍摄中"状态才会把照片放进内存缓存',
+  },
+  {
+    id: 'ext-info',
+    label: '扩展清单 0x9202 (0x12C,1)',
+    op: 0x9202,
+    params: [0x12c, 1],
+    hint: '机身真正支持的操作/事件/属性清单；联机时已自动请求，这里可手动复核',
+  },
+  {
     id: 'all-props',
     label: '全部属性 0x9209',
     op: 0x9209,

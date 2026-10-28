@@ -46,3 +46,6 @@ build-artifacts/
 
 # 逆向分析工作区：含第三方 APK 与上游 REA 仓库，不进本仓库
 /REA (Reverse Engineer Anything)/
+
+# 本机逆向工具与抓包工作目录（frida-server、日志、参考源码等）
+/_work/

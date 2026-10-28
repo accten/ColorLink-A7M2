@@ -263,6 +263,18 @@ export class SonyCameraTransport implements ICameraTransport {
         };
       }
 
+      // 机身回的是 RAW(ARW)：Transmission 没问题，是我们的调色管线还不吃 ARW。
+      if (message.includes('RAW_CAPTURE')) {
+        return {
+          ok: false,
+          error: {
+            code: 'E_STILL_TRANSFER_UNSUPPORTED',
+            message: '相机回传的是 RAW(ARW)，目前还只能处理 JPEG',
+            hints: ['把相机画质改成 JPEG 或 RAW+JPEG 后重拍', 'RAW 文件仍在相机存储卡里'],
+          },
+        };
+      }
+
       return {
         ok: false,
         error: {

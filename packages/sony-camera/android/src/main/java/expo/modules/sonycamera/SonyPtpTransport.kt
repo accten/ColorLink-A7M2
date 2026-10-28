@@ -37,8 +37,23 @@ internal class SonyPtpTransport private constructor(
     private const val PROPERTY_OBJECT_IN_MEMORY = 0xD215
     private const val PROPERTY_LIVE_VIEW_STATUS = 0xD221
 
-    /** 快门控制码（SonyStillImage）：0xD2C2 */
+    /** 合焦状态：1→2/3 表示对上焦（Sony 用它代替"可以完全按下去了"）。 */
+    private const val PROPERTY_FOCUS_FOUND = 0xD213
+
+    /** 半按快门（S1）：不发它机身不会进入"把这一张放进内存缓存"的状态。 */
+    private const val PROPERTY_HALF_PRESS_BUTTON = 0xD2C1
+
+    /** 全按快门（S2 / SonyStillImage）：0xD2C2 */
     private const val PROPERTY_CAPTURE_BUTTON = 0xD2C2
+
+    /**
+     * SDIO_GetExtDeviceInfo(0x9202) 第一个参数：向机身申请 PTP 3.00 扩展协议。
+     *
+     * 之前这里传的是 0x00C8(200)，机身按 200 回包，返回的"扩展操作/属性/事件清单"是空的，
+     * 于是 DeviceInfo 里 properties=0、0x9209 属性容器也解析不出来 —— 老机身（ILCE-7M2）
+     * 的 D215/D2C1/D2C2 全都读不到。改成和 libgphoto2 一致的 0x012C(300) 才会交清单。
+     */
+    private const val SONY_PROTOCOL_EXTENDED = 0x012C
     private const val MAX_CONTAINER_BYTES = 100 * 1024 * 1024
     private const val MAX_USB_READ_BYTES = 64 * 1024
     private const val USB_TIMEOUT_MS = 5_000
@@ -49,6 +64,9 @@ internal class SonyPtpTransport private constructor(
 
     /** 两次试读之间的间隔：太密会把 A7M2 的 PTP 打僵 */
     private const val CAPTURE_PROBE_INTERVAL_MS = 1_200L
+
+    /** 按住快门等对焦的最长时间（参考实现是 1s） */
+    private const val CAPTURE_PRESS_HOLD_MS = 1_000L
 
     /** 等待+试读总共试几次就认命（约 2.8s + 4×1.2s） */
     private const val MAX_CAPTURE_PROBE_ATTEMPTS = 4
@@ -112,6 +130,9 @@ internal class SonyPtpTransport private constructor(
   private var bufferedInput = byteArrayOf()
   private var bufferedInputOffset = 0
 
+  /** 0x9202 交回来的 Sony 扩展清单（操作 / 事件 / 属性）。 */
+  private var sonyVendorCodes = SonyVendorCodes()
+
   /** 只为诊断打印一次：这台机身到底上报了哪些 Sony 属性 */
   private var tracedPropertyCodes = false
 
@@ -128,6 +149,12 @@ internal class SonyPtpTransport private constructor(
 
   /** 已经试读了几次回传句柄：够了就认命，别让用户干等 35 秒 */
   private var captureProbeAttempts = 0
+
+  /** 上一次看到的 D215，只在变化时打日志 */
+  private var loggedObjectInMemory = Long.MIN_VALUE
+
+  /** 0x1014 连续读不到 D215 的次数：够多就不再用它，避免每次轮询空跑一条命令 */
+  private var propDescMisses = 0
 
   /**
    * 只有刚按过快门才允许报 CAPTURE_UNSUPPORTED。
@@ -240,18 +267,26 @@ internal class SonyPtpTransport private constructor(
     execute(0x9201, intArrayOf(1, 0, 0), expectsData = true)
     execute(0x9201, intArrayOf(2, 0, 0), expectsData = true)
     var versionData: ByteArray? = null
-    for (attempt in 0 until 6) {
-      val info = execute(0x9202, intArrayOf(0x00C8), expectsData = true, allowBusy = true)
-      if (info.data?.isNotEmpty() == true) {
-        versionData = info.data
-        break
+    // 先按 libgphoto2 的请求值（0x12C, 1）：只有这个版本号才会交回扩展清单。
+    // 万一这具机身不认，退回我们以前用的 0x00C8，保证联机本身不会失败。
+    for (request in arrayOf(intArrayOf(SONY_PROTOCOL_EXTENDED, 1), intArrayOf(0x00C8))) {
+      for (attempt in 0 until 3) {
+        val info = execute(request, expectsData = true, allowBusy = true)
+        if (info.data?.isNotEmpty() == true) {
+          versionData = info.data
+          break
+        }
+        SystemClock.sleep(150)
       }
-      SystemClock.sleep(150)
+      if (versionData != null) break
+      trace("Sony extended-info request ${request.joinToString { it.hex32() }} returned nothing; trying fallback")
     }
-    val protocolData = versionData ?: throw SonyPtpException("Sony PTP authentication did not return protocol information.")
-    if (protocolData.size < 2 || protocolData.u16(0) < 0x00C8) {
-      throw SonyPtpException("The Sony camera reported an unsupported PTP protocol version.")
-    }
+    val protocolData = versionData
+      ?: throw SonyPtpException("Sony PTP authentication did not return protocol information.")
+    val protocolVersion = protocolData.u16(0)
+    trace("Sony extended protocol version=0x%04X bytes=%d".format(protocolVersion, protocolData.size))
+    sonyVendorCodes = parseSonyVendorCodes(protocolData)
+    trace(sonyVendorCodes.describe())
     execute(0x9201, intArrayOf(3, 0, 0), expectsData = true)
 
     // Read the camera's own capability lists. This must not be fatal: a body that
@@ -259,7 +294,15 @@ internal class SonyPtpTransport private constructor(
     // accurately, and an empty capability set is the honest result in that case.
     deviceInfo = runCatching {
       execute(0x1001, expectsData = true, allowBusy = true).data?.let(SonyPtpDeviceInfo::parse)
-    }.getOrNull()
+    }.getOrNull()?.let { info ->
+      // Sony 把真正支持的操作/属性/事件藏在 0x9202 的清单里，DeviceInfo 里往往一个都没有。
+      // 合并进去之后上层（以及 "这台机身到底有没有 D215" 这种判断）才看得到真相。
+      info.copy(
+        operationsSupported = info.operationsSupported + sonyVendorCodes.operations,
+        devicePropertiesSupported = info.devicePropertiesSupported + sonyVendorCodes.properties,
+        eventsSupported = info.eventsSupported + sonyVendorCodes.events,
+      )
+    }
     deviceInfo?.let {
       trace(
         "Sony DeviceInfo model=${it.model} version=${it.deviceVersion} " +
@@ -268,6 +311,10 @@ internal class SonyPtpTransport private constructor(
           "ops=[${it.operationsSupported.sorted().joinToString(",") { code -> code.hex() }}]",
       )
     } ?: trace("Sony camera did not return DeviceInfo; capabilities will be reported as unknown")
+    if (sonyVendorCodes.properties.isNotEmpty()) {
+      val sonyProps = sonyVendorCodes.properties.sorted().joinToString(",") { it.hex() }
+      trace("Sony vendor properties=$sonyProps")
+    }
   }
 
   fun prepareStillCapture() {
@@ -296,6 +343,44 @@ internal class SonyPtpTransport private constructor(
   }
 
   /**
+   * 读单个属性的当前值：标准 `GetDevicePropDesc(0x1014)`。
+   *
+   * 老机身（ILCE-7M2）的 `0x9209` 属性大容器解析不出任何条目，但 `0x1014` 逐条问是有回的 ——
+   * 上一版就是只走 0x9209，结果 D215/D213 都被判成"这台机身没有"，取图逻辑只能瞎猜。
+   */
+  fun readPropDescCurrent(propCode: Int): Long? {
+    val result = execute(
+      0x1014,
+      intArrayOf(propCode),
+      expectsData = true,
+      acceptedResponses = setOf(
+        RESPONSE_OK,
+        RESPONSE_INVALID_HANDLE,
+        RESPONSE_DEVICE_BUSY,
+        RESPONSE_ACCESS_DENIED,
+      ),
+    )
+    if (result.responseCode != RESPONSE_OK) return null
+    val data = result.data ?: return null
+    if (data.size < 7) return null
+    val dataType = data.u16(2)
+    val size = when (dataType) {
+      0x0001, 0x0002 -> 1 // INT8 / UINT8
+      0x0003, 0x0004 -> 2 // INT16 / UINT16
+      0x0005, 0x0006 -> 4 // INT32 / UINT32
+      0x0007, 0x0008 -> 8 // INT64 / UINT64
+      else -> return null
+    }
+    val currentOffset = 5 + size
+    if (data.size < currentOffset + size) return null
+    var value = 0L
+    for (index in 0 until size) {
+      value = value or ((data[currentOffset + index].toLong() and 0xFFL) shl (8 * index))
+    }
+    return value
+  }
+
+  /**
    * 直接 `GetObject(0x1009)` 读 Sony 的虚拟句柄（取景 0xFFFFC002 / 已拍图像 0xFFFFC001）。
    *
    * 参考实现里没有 `D221` 门禁、也不先发 `GetObjectInfo(0x1008)`：
@@ -316,6 +401,33 @@ internal class SonyPtpTransport private constructor(
     )
     if (result.responseCode != RESPONSE_OK) return null
     return result.data?.let(SonyPtpCodec::parseSonyJpegData)
+  }
+
+  /**
+   * 取回整个对象，但不假设它是 JPEG。
+   *
+   * JPEG 走 [SonyPtpCodec.parseSonyJpegData] 剥掉 Sony 的包裹头；RAW(ARW) 是 TIFF 容器，
+   * 一个 `FF D8` 都没有，旧逻辑会把它当成"没取到"直接丢掉。
+   */
+  private fun getObjectPayload(handle: Int): ByteArray? {
+    val result = execute(
+      0x1009,
+      intArrayOf(handle),
+      expectsData = true,
+      acceptedResponses = setOf(
+        RESPONSE_OK,
+        RESPONSE_INVALID_HANDLE,
+        RESPONSE_DEVICE_BUSY,
+        RESPONSE_ACCESS_DENIED,
+      ),
+    )
+    if (result.responseCode != RESPONSE_OK) {
+      trace("getObject handle=${"%08X".format(handle)} code=${result.responseCode.hex()}")
+      return null
+    }
+    val data = result.data ?: return null
+    if (data.isEmpty()) return null
+    return SonyPtpCodec.extractSonyObjectPayload(data)
   }
 
   fun prepareLiveView() {
@@ -364,12 +476,38 @@ internal class SonyPtpTransport private constructor(
     captureInProgress = true
     captureProbeAttempts = 0
     loggedSettleWait = false
+    loggedObjectInMemory = Long.MIN_VALUE
     captureStartedAt = SystemClock.elapsedRealtime()
-    // 参考实现的快门序列：只发 SonyStillImage(0xD2C2) 这一次控制，按下(2) → 等 1s → 松开(1)。
-    // 不再发 0xD2C1 半按：A7 II 上多出来的半按可能让机身停在半按态，后续读图全部失效。
-    setButton(PROPERTY_CAPTURE_BUTTON, 2)
-    SystemClock.sleep(1_000)
+
+    // 开拍前先把相机内存里遗留的旧照片读走：不清的话这一枪读回来的会是上一张，
+    // 而且机身要等这张取走之后才会报告新对象。
+    repeat(3) {
+      val stale = runCatching { readPropDescCurrent(PROPERTY_OBJECT_IN_MEMORY) }.getOrNull() ?: return@repeat
+      if (stale < 0x8000) return@repeat
+      trace("clearing stale in-memory object D215=0x%04X".format(stale))
+      runCatching { getObjectPayload(HANDLE_CAPTURED_IMAGE) }
+    }
+
+    // Sony 的控制序列（libgphoto2 在 ILCE 上实测）：半按 → 全按 → 停住等对焦 → 松开全按 → 松开半按。
+    // 只发全按(0xD2C2)不够：机身不会把这一张放进内存缓存，0xFFFFC001 永远是空的，
+    // 之后 0x1009 只会回 InvalidObjectHandle —— 这正是之前一直"取不到图"的原因。
+    runCatching { setButton(PROPERTY_HALF_PRESS_BUTTON, 2) }
+    SystemClock.sleep(120)
+    runCatching { setButton(PROPERTY_CAPTURE_BUTTON, 2) }
+
+    val focusDeadline = SystemClock.elapsedRealtime() + CAPTURE_PRESS_HOLD_MS
+    while (SystemClock.elapsedRealtime() < focusDeadline) {
+      if (lastEventCode == 0xC201) break
+      val focus = runCatching { readPropDescCurrent(PROPERTY_FOCUS_FOUND) }.getOrNull()
+      if (focus != null && focus >= 2L) {
+        trace("focus found D213=0x%04X".format(focus))
+        break
+      }
+      SystemClock.sleep(50)
+    }
+
     runCatching { setButton(PROPERTY_CAPTURE_BUTTON, 1) }
+    runCatching { setButton(PROPERTY_HALF_PRESS_BUTTON, 1) }
   }
 
   fun awaitCapturedJpeg(timeoutMs: Long): ByteArray {
@@ -383,8 +521,9 @@ internal class SonyPtpTransport private constructor(
       SystemClock.sleep(100)
     }
     throw SonyPtpException(
-      "The camera fired, but no JPEG reached the app. Early bodies such as ILCE-7M2 may not " +
-        "export the capture over PTP: check PC Remote save settings, or import the card directly.",
+      "The shutter fired, but no image came back over PTP. The camera (ILCE-7M2) only hands " +
+        "the shot to the phone when it is captured into its in-memory buffer: check that the " +
+        "camera is not in a mode that writes only to the card (e.g. RAW-only or a locked card).",
     )
   }
 
@@ -441,27 +580,42 @@ internal class SonyPtpTransport private constructor(
     return null
   }
   fun pollCapturedJpeg(): ByteArray? {
-    val properties = readDeviceProperties()
-    val objectInMemory = SonyPtpProperties.scalar(properties, PROPERTY_OBJECT_IN_MEMORY)
-
-    // 有 D215 的机身按 Sony 的规矩来：没到 0x8000 之前读虚拟句柄会打崩固件
-    if (objectInMemory != null && objectInMemory < 0x8000) {
-      capturedObjectConsumed = false
-      return null
-    }
     if (capturedObjectConsumed) return null
 
+    // Sony 的"这一张可以取了"信号就是 D215(ObjectInMemory)：>= 0x8000 表示相机内存里
+    // 有对象，句柄固定是 0xFFFFC001。这条属性老机身也能用 0x1014 读到，所以优先走它。
+    val viaPropDesc = runCatching { readPropDescCurrent(PROPERTY_OBJECT_IN_MEMORY) }.getOrNull()
+    if (viaPropDesc == null) {
+      propDescMisses += 1
+    } else {
+      propDescMisses = 0
+    }
+    val objectInMemory = viaPropDesc
+      ?: if (propDescMisses >= 2) {
+        // 0x1014 问不到这条属性就退回 0x9209 大容器，并且别每次轮询都发（会拖慢整个流程）
+        SonyPtpProperties.scalar(readDeviceProperties(), PROPERTY_OBJECT_IN_MEMORY)
+      } else {
+        null
+      }
+
     if (objectInMemory != null) {
-      trace("Sony captured-object ready D215=${"0x%04X".format(objectInMemory)}")
-      val jpeg = getObjectDirect(HANDLE_CAPTURED_IMAGE) ?: return null
+      if (objectInMemory != loggedObjectInMemory) {
+        loggedObjectInMemory = objectInMemory
+        trace("Sony D215 ObjectInMemory=0x%04X".format(objectInMemory))
+      }
+      // 没到 0x8000 之前读虚拟句柄会被固件当成非法访问（真机踩到过：整条 USB 打死）
+      if (objectInMemory < 0x8000) return null
+      if (!captureInProgress && objectInMemory < 0x8001) return null
+      trace("Sony captured-object ready D215=0x%04X".format(objectInMemory))
+      val payload = getObjectPayload(HANDLE_CAPTURED_IMAGE) ?: return null
       capturedObjectConsumed = true
-      return jpeg
+      captureInProgress = false
+      return payload
     }
 
-    // 没有 D215 的机身（实测 ILCE-7M2，DeviceInfo 里 properties=0）：
+    // 没有 D215 的机身（早期固件）：退回事件 + 定时试读虚拟句柄。
     //   1) 绝不能调 GetObjectHandles —— 它虽然被声明支持，但会静默挂死整条 USB；
     //   2) 也不能刚按完快门就去读虚拟句柄 —— 相机还在写卡，固件会卡住不回包。
-    // 所以先等相机把这张写完，再按固定间隔试读 Sony 的虚拟回传句柄。
     // 取景线程也会调到这里：没有按快门就安静返回，别把"没有新照片"当成联机失败。
     if (!captureInProgress) return null
 
@@ -494,7 +648,7 @@ internal class SonyPtpTransport private constructor(
       loggedMissingD215 = true
       trace("D215 missing on this body; probing the Sony capture handle")
     }
-    val jpeg = getObjectDirect(HANDLE_CAPTURED_IMAGE)
+    val jpeg = getObjectPayload(HANDLE_CAPTURED_IMAGE)
     if (jpeg != null) {
       capturedObjectConsumed = true
       captureInProgress = false
@@ -724,6 +878,57 @@ private fun clearEndpointHalt(
 private data class PtpContainer(val type: Int, val code: Int, val transactionId: Int, val payload: ByteArray)
 private data class PtpResult(val data: ByteArray?, val responseCode: Int)
 
+/**
+ * `SDIO_GetExtDeviceInfo(0x9202)` 交回来的 Sony 扩展清单。
+ *
+ * 数据布局（参考实现 `ptp_sony_get_vendorpropcodes`）：
+ * ```
+ * UINT16   协议版本
+ * AUINT16  设备属性码
+ * AUINT16  控制项码
+ * ```
+ * 两段数组里的每个码按高 3 位分类：0x1000 操作 / 0x4000 事件 / 0x5000 属性。
+ */
+internal data class SonyVendorCodes(
+  val operations: Set<Int> = emptySet(),
+  val events: Set<Int> = emptySet(),
+  val properties: Set<Int> = emptySet(),
+) {
+  fun describe(): String =
+    "Sony vendor codes ops=[${operations.sorted().joinToString(",") { "0x%04X".format(it) }}] " +
+      "props=[${properties.sorted().joinToString(",") { "0x%04X".format(it) }}] " +
+      "events=[${events.sorted().joinToString(",") { "0x%04X".format(it) }}]"
+}
+
+internal fun parseSonyVendorCodes(data: ByteArray): SonyVendorCodes {
+  if (data.size < 4) return SonyVendorCodes()
+  var offset = 2
+  fun readCodeSet(): List<Int> {
+    if (offset + 4 > data.size) return emptyList()
+    val count = data.u32(offset).toInt()
+    offset += 4
+    if (count <= 0 || offset + count * 2 > data.size) return emptyList()
+    val codes = ArrayList<Int>(count)
+    repeat(count) {
+      codes.add(data.u16(offset))
+      offset += 2
+    }
+    return codes
+  }
+  val all = readCodeSet() + readCodeSet()
+  val operations = LinkedHashSet<Int>()
+  val events = LinkedHashSet<Int>()
+  val properties = LinkedHashSet<Int>()
+  for (code in all) {
+    when (code and 0x7000) {
+      0x1000 -> operations.add(code)
+      0x4000 -> events.add(code)
+      0x5000 -> properties.add(code)
+    }
+  }
+  return SonyVendorCodes(operations, events, properties)
+}
+
 internal object SonyPtpCodec {
   fun buildContainer(type: Int, code: Int, transactionId: Int, payload: ByteArray): ByteArray =
     ByteBuffer.allocate(12 + payload.size).order(ByteOrder.LITTLE_ENDIAN)
@@ -749,6 +954,39 @@ internal object SonyPtpCodec {
       }
     }
     return data.copyOfRange(start, end)
+  }
+
+  /**
+   * 把 `GetObject(0x1009)` 的 data 段还原成真实文件字节，不假设格式。
+   *
+   * - JPEG（`FF D8`）：可能就是原样，也可能是 Sony 的 `[u32 offset][header]JPEG` 包裹；
+   * - RAW（`II*\0` / `MM\0*`）：TIFF 容器，一个 `FF D8` 都没有，直接原样返回；
+   * - 其他：返回原始字节，交给上层判断。
+   */
+  fun extractSonyObjectPayload(data: ByteArray): ByteArray? {
+    if (data.isEmpty()) return null
+    if (data.size >= 4 && isObjectMagic(data, 0)) return data
+    parseSonyJpegData(data)?.let { return it }
+    if (data.size >= 4) {
+      val offset = data.u32(0).toInt()
+      if (offset in 1 until data.size - 3 && isObjectMagic(data, offset)) {
+        return data.copyOfRange(offset, data.size)
+      }
+    }
+    return data
+  }
+
+  private fun isObjectMagic(data: ByteArray, at: Int): Boolean {
+    if (at + 3 >= data.size) return false
+    val b0 = data[at].toInt() and 0xFF
+    val b1 = data[at + 1].toInt() and 0xFF
+    val b2 = data[at + 2].toInt() and 0xFF
+    val b3 = data[at + 3].toInt() and 0xFF
+    if (b0 == 0xFF && b1 == 0xD8) return true // JPEG
+    if (b0 == 0x49 && b1 == 0x49 && b2 == 0x2A && b3 == 0x00) return true // TIFF/ARW little-endian
+    if (b0 == 0x4D && b1 == 0x4D && b2 == 0x00 && b3 == 0x2A) return true // TIFF/ARW big-endian
+    if (b0 == 0x89 && b1 == 0x50 && b2 == 0x4E && b3 == 0x47) return true // PNG
+    return false
   }
 
   private fun findJpegStart(data: ByteArray, searchStart: Int): Int? =
