@@ -388,6 +388,58 @@ internal class SonyPtpTransport private constructor(
     )
   }
 
+  /**
+   * 拍完当下把几条取图路径都试一遍，并把每条的结果打进日志。
+   *
+   * 真机上 0xFFFFC001 只在这个窗口里有效（随后相机就发 ObjectRemoved），
+   * 所以必须一次抓完；分开手动点探针时对象早就没了。
+   */
+  private fun tryFetchCaptured(handle: Int): ByteArray? {
+    // 1) 整读 0x1009
+    val whole = getObjectDirect(handle)
+    trace("fetch 0x1009 handle=${"%08X".format(handle)} jpeg=${whole?.size ?: 0}")
+    if (whole != null) return whole
+
+    // 2) 标准分块 0x101B [handle, offset, size]
+    runCatching {
+      val partial = execute(
+        0x101B,
+        intArrayOf(handle, 0, 0x40000),
+        expectsData = true,
+        allowBusy = true,
+        acceptedResponses = setOf(RESPONSE_OK, RESPONSE_INVALID_HANDLE, RESPONSE_DEVICE_BUSY, RESPONSE_ACCESS_DENIED),
+      )
+      trace("fetch 0x101B code=${partial.responseCode.hex()} bytes=${partial.data?.size ?: 0}")
+      partial.data?.let(SonyPtpCodec::parseSonyJpegData)?.let { return it }
+    }
+
+    // 3) Sony 厂商分块 0x923D [handle, offset, totalSize, cardInfo]
+    for (cardInfo in intArrayOf(0, 1)) {
+      runCatching {
+        val sonyPartial = execute(
+          0x923D,
+          intArrayOf(handle, 0, 0x40000, cardInfo),
+          expectsData = true,
+          allowBusy = true,
+          acceptedResponses = setOf(RESPONSE_OK, RESPONSE_INVALID_HANDLE, RESPONSE_DEVICE_BUSY, RESPONSE_ACCESS_DENIED),
+        )
+        trace("fetch 0x923D cardInfo=$cardInfo code=${sonyPartial.responseCode.hex()} bytes=${sonyPartial.data?.size ?: 0}")
+        sonyPartial.data?.let(SonyPtpCodec::parseSonyJpegData)?.let { return it }
+      }
+    }
+
+    // 4) 先取 ObjectInfo 再整读
+    runCatching {
+      val info = execute(
+        0x1008,
+        intArrayOf(handle),
+        expectsData = true,
+        acceptedResponses = setOf(RESPONSE_OK, RESPONSE_INVALID_HANDLE, RESPONSE_DEVICE_BUSY, RESPONSE_ACCESS_DENIED),
+      )
+      trace("fetch 0x1008 code=${info.responseCode.hex()} bytes=${info.data?.size ?: 0}")
+    }
+    return null
+  }
   fun pollCapturedJpeg(): ByteArray? {
     val properties = readDeviceProperties()
     val objectInMemory = SonyPtpProperties.scalar(properties, PROPERTY_OBJECT_IN_MEMORY)
@@ -414,11 +466,11 @@ internal class SonyPtpTransport private constructor(
     if (!captureInProgress) return null
 
     // 相机通过中断端点推过 ObjectAdded(0xC201) 的话，参数里就是新对象的真实句柄。
-    // 这是最靠谱的一条路径：A7M2 的 0xFFFFC001 一直回空数据，但事件句柄是标准对象。
+    // 这里一次性把几种取图方式都试一遍并记录结果 —— 真机只有"拍完当下"这个窗口，分开试抓不到。
     if (lastEventCode == 0xC201 && lastEventParams.isNotEmpty()) {
       val handle = lastEventParams[0]
       trace("capture: object-added event handle=${"%08X".format(handle)}")
-      val fromEvent = getObjectDirect(handle)
+      val fromEvent = tryFetchCaptured(handle)
       if (fromEvent != null) {
         capturedObjectConsumed = true
         captureInProgress = false
