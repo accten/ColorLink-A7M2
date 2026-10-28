@@ -34,16 +34,26 @@ for ($i = 0; $i -lt 150 -and -not $runId; $i++) {
 if (-not $runId) { 'NO_RUN'; exit 1 }
 "RUN_ID=$runId"
 
+# 用 jobs 接口判断结论：runs 接口的 JSON 偶尔会被代理截断，导致误判失败
+$buildOk = $false
+$completed = $false
 for ($i = 0; $i -lt 120; $i++) {
-  $st = Api "/repos/$repo/actions/runs/$runId" $true
-  if (-not $st) { $st = Api "/repos/$repo/actions/runs/$runId" $false }
-  if ($st -match '"status":\s*"completed"') {
-    if ($st -notmatch '"conclusion":\s*"success"') { 'BUILD_FAILED'; exit 1 }
-    'BUILD_OK'
+  $jobs = Api "/repos/$repo/actions/runs/$runId/jobs" $true
+  if (-not $jobs) { $jobs = Api "/repos/$repo/actions/runs/$runId/jobs" $false }
+  if ($jobs -match '"status":\s*"completed"' -and $jobs -match '"conclusion":\s*"success"') {
+    $completed = $true
+    $buildOk = $true
+    break
+  }
+  if ($jobs -match '"conclusion":\s*"(failure|cancelled|timed_out)"') {
+    $completed = $true
     break
   }
   Start-Sleep -Seconds 30
 }
+if (-not $completed) { 'BUILD_TIMEOUT'; exit 1 }
+if (-not $buildOk) { 'BUILD_FAILED'; exit 1 }
+'BUILD_OK'
 
 $json = Api "/repos/$repo/actions/runs/$runId/artifacts" $true
 if (-not $json) { $json = Api "/repos/$repo/actions/runs/$runId/artifacts" $false }
