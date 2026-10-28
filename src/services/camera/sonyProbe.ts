@@ -107,14 +107,20 @@ export async function probeVendorOp(op: number, params: number[]): Promise<Probe
       ms: typeof raw.ms === 'number' ? raw.ms : undefined,
       error: typeof raw.error === 'string' ? raw.error : undefined,
     };
+    // 256 字节 = 512 个 hex 字符，一条日志装不下：分 200 字符一段写，方便从 logcat 捞全
+    const head = result.head ?? '';
     eventLog.info('probe.sony', {
       op: `0x${op.toString(16).toUpperCase()}`,
       code: result.code,
       bytes: result.bytes,
       ms: result.ms,
       error: result.error,
-      head: result.head?.slice(0, 128),
+      headLength: head.length,
     });
+    const chunk = 200;
+    for (let i = 0; i * chunk < head.length; i += 1) {
+      eventLog.info('probe.sony.hex', { part: i, hex: head.slice(i * chunk, (i + 1) * chunk) });
+    }
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -126,6 +132,6 @@ export async function probeVendorOp(op: number, params: number[]): Promise<Probe
 export function formatProbeResult(result: ProbeResult): string {
   if (!result.ok) return `失败：${result.error ?? '未知原因'}（${result.ms ?? 0}ms）`;
   const code = result.code != null ? `0x${result.code.toString(16).toUpperCase()}` : '—';
-  const head = result.head ? result.head.slice(0, 96) : '';
+  const head = result.head ? result.head.slice(0, 512) : '';
   return `code=${code} bytes=${result.bytes ?? 0} ms=${result.ms ?? 0}${head ? `\n${head}` : ''}`;
 }
