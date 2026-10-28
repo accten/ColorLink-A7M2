@@ -159,6 +159,9 @@ internal class SonyPtpTransport private constructor(
   /** 上一次看到的 D215，只在变化时打日志 */
   private var loggedObjectInMemory = Long.MIN_VALUE
 
+  /** 一次拍摄里只记一次命令失败，否则 100 次轮询会写 100 行日志 */
+  private var loggedCaptureReadFailure = false
+
   /** 0x1014 连续读不到 D215 的次数：够多就不再用它，避免每次轮询空跑一条命令 */
   private var propDescMisses = 0
 
@@ -361,7 +364,7 @@ internal class SonyPtpTransport private constructor(
    * 老机身（ILCE-7M2）的 `0x9209` 属性大容器解析不出任何条目，但 `0x1014` 逐条问是有回的 ——
    * 上一版就是只走 0x9209，结果 D215/D213 都被判成"这台机身没有"，取图逻辑只能瞎猜。
    */
-  fun readPropDescCurrent(propCode: Int, readRetries: Int = 1): Long? {
+  fun readPropDescCurrent(propCode: Int, readRetries: Int = 2): Long? {
     val result = execute(
       0x1014,
       intArrayOf(propCode),
@@ -530,11 +533,18 @@ internal class SonyPtpTransport private constructor(
     loggedSettleWait = false
     loggedObjectInMemory = Long.MIN_VALUE
     propDescMisses = 0
+    loggedCaptureReadFailure = false
     captureStartedAt = SystemClock.elapsedRealtime()
+
+    // 停取景会打断一帧的传输，那条事务的数据/响应还压在端点里。不清理就直接发命令，
+    // 读到的会是上一帧的残料 —— 真机表现就是一串 `result=-1` 然后整条链路错位。
+    drainPendingInput()
 
     // 开拍前先把相机内存里遗留的旧照片读走：不清的话这一枪读回来的会是上一张。
     // 只试一次：读不到就是读不到（相机不在"有货"状态），绝不为此在拍之前耗掉 20 秒。
-    val stale = runCatching { readPropDescCurrent(PROPERTY_OBJECT_IN_MEMORY) }.getOrNull()
+    val stale = runCatching { readPropDescCurrent(PROPERTY_OBJECT_IN_MEMORY) }
+      .onFailure { noteCaptureReadFailure("pre-capture D215", it) }
+      .getOrNull()
     if (stale != null && stale >= 0x8000) {
       trace("clearing stale in-memory object D215=0x%04X".format(stale))
       runCatching { getObjectPayload(HANDLE_CAPTURED_IMAGE) }
@@ -544,13 +554,17 @@ internal class SonyPtpTransport private constructor(
     // 只发全按(0xD2C2)不够：机身不会把这一张放进内存缓存，0xFFFFC001 永远是空的，
     // 之后 0x1009 只会回 InvalidObjectHandle —— 这正是之前一直"取不到图"的原因。
     runCatching { setButton(PROPERTY_HALF_PRESS_BUTTON, 2) }
+      .onFailure { noteCaptureReadFailure("half-press", it) }
     SystemClock.sleep(120)
     runCatching { setButton(PROPERTY_CAPTURE_BUTTON, 2) }
+      .onFailure { noteCaptureReadFailure("full-press", it) }
 
     val focusDeadline = SystemClock.elapsedRealtime() + CAPTURE_PRESS_HOLD_MS
     while (SystemClock.elapsedRealtime() < focusDeadline) {
       if (lastEventCode == 0xC201) break
-      val focus = runCatching { readPropDescCurrent(PROPERTY_FOCUS_FOUND) }.getOrNull()
+      val focus = runCatching { readPropDescCurrent(PROPERTY_FOCUS_FOUND) }
+        .onFailure { noteCaptureReadFailure("D213", it) }
+        .getOrNull()
       if (focus != null && focus >= 2L) {
         trace("focus found D213=0x%04X".format(focus))
         break
@@ -559,7 +573,36 @@ internal class SonyPtpTransport private constructor(
     }
 
     runCatching { setButton(PROPERTY_CAPTURE_BUTTON, 1) }
+      .onFailure { noteCaptureReadFailure("release full", it) }
     runCatching { setButton(PROPERTY_HALF_PRESS_BUTTON, 1) }
+      .onFailure { noteCaptureReadFailure("release half", it) }
+  }
+
+  /**
+   * 把端点里遗留的字节读空。
+   *
+   * 取景被停掉时，最后一帧的事务可能只读了一半：剩下的数据还挂在 bulk-IN 上。
+   * 这时发下一条命令，读到的就是上一帧的残料（或者干脆 `-1`）。
+   * 只在"没有事务在飞"的时刻调用（开拍前），并且有界，最多丢 64 个包。
+   */
+  private fun drainPendingInput() = synchronized(ioLock) {
+    bufferedInput = byteArrayOf()
+    bufferedInputOffset = 0
+    val scratch = ByteArray(maxOf(4096, bulkIn.maxPacketSize))
+    var drained = 0
+    repeat(64) {
+      val read = runCatching { connection.bulkTransfer(bulkIn, scratch, 0, scratch.size, 30) }.getOrDefault(-1)
+      if (read <= 0) return@synchronized
+      drained += read
+    }
+    clearEndpointHalt(connection, bulkIn, trace)
+    trace("drained $drained stale bytes from bulk-IN before capture")
+  }
+
+  private fun noteCaptureReadFailure(what: String, error: Throwable) {
+    if (loggedCaptureReadFailure) return
+    loggedCaptureReadFailure = true
+    trace("capture step '$what' failed: ${error.message ?: error::class.java.simpleName}")
   }
 
   fun awaitCapturedJpeg(timeoutMs: Long): ByteArray {
@@ -643,7 +686,9 @@ internal class SonyPtpTransport private constructor(
 
     // Sony 的"这一张可以取了"信号就是 D215(ObjectInMemory)：>= 0x8000 表示相机内存里
     // 有对象，句柄固定是 0xFFFFC001。这条属性老机身也能用 0x1014 读到，所以优先走它。
-    val viaPropDesc = runCatching { readPropDescCurrent(PROPERTY_OBJECT_IN_MEMORY) }.getOrNull()
+    val viaPropDesc = runCatching { readPropDescCurrent(PROPERTY_OBJECT_IN_MEMORY) }
+      .onFailure { noteCaptureReadFailure("poll D215", it) }
+      .getOrNull()
     if (viaPropDesc == null) {
       propDescMisses += 1
     } else {
@@ -876,7 +921,11 @@ internal class SonyPtpTransport private constructor(
     var offset = 0
     while (offset < output.size) {
       val written = connection.bulkTransfer(bulkOut, output, offset, output.size - offset, USB_TIMEOUT_MS)
-      if (written <= 0) throw SonyPtpException("USB write to Sony camera failed.")
+      if (written <= 0) {
+        // 写失败以前只抛异常、不打日志，真机上只能看到"上层吞掉了"，没法判断是哪一步挂的
+        trace("USB bulk-OUT failed op=0x%04X tx=%d result=%d at=%d/%d".format(code, transactionId, written, offset, output.size))
+        throw SonyPtpException("USB write to Sony camera failed.")
+      }
       offset += written
     }
   }
