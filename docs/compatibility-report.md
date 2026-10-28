@@ -212,3 +212,49 @@ A7M2 的方言不符，已全部改掉：
 1. 让用户在相机上把 USB 连接改成 MTP/存储，用 Android MTP 主机实现（libmtp 级别工作量，且此时不能联机取景）
 2. 走相机 Wi-Fi（A7 II 时代的 Smart Remote / PlayMemories 私有 API），需要另外逆向下行协议
 3. 保持现状：联机 + 监看 + 远程快门，文件用读卡器
+
+## 11. 事件通道：为什么像素蛋糕能"看起来取到图"，以及我们到哪一步
+
+像素蛋糕在 A7M2 上确实把一张 RAW 拉进了内存（真机日志 18:17:39-41：
+`loadImage handleCompletion imageComplete`，`Raw:Demosaic/LdBayer`，`maker=SONY model=ILCE-7M2`），
+且那次会话里 **USB 没有重新枚举** —— 说明它走的是 PTP 会话内的通道。
+
+它们的 `InterruptEventLoop` 就是干这个的：相机拍完会在**中断端点（0x83）**上推
+`ObjectAdded (0xC201)`，参数里带新对象句柄。
+
+我们补上事件读取后，在真机上复现了同一条事件流：
+
+```
+event loop started endpoint=0x0083 max=32
+PTP event code=0xC203 params=0x0000D21D      // 相机属性变化
+PTP event code=0xC201 params=0xFFFFC001      // 按快门后：新对象 = 虚拟回传句柄
+PTP event code=0xC202 params=0xFFFFC001      // 随后被移除
+```
+
+但**拿到句柄不等于拿到字节**。同一窗口内把四条路径都试了一遍：
+
+| 路径 | 结果 |
+|---|---|
+| `0x1009 GetObject(0xFFFFC001)` | `code=0x2001 bytes=0`（成功、无数据） |
+| `0x101B GetPartialObject(handle,0,64KB)` | **相机直接断链**（`USB write failed`，需要重插） |
+| `0x923D [handle,0,64KB,cardInfo]` | 未及执行（上一条已把链路打断） |
+| `0x1008 GetObjectInfo(handle)` | 之前实测会挂死 |
+
+同一次会话里还验证了：
+
+- 写 `0xD222`（CaptureDestination / StillImageStoreDestination）= 1 / 2 都被接受（`0x2001`），
+  但**并没有让相机把图交出来**；
+- `0x923B(1)`、`0x9212(1)`、`0x1007(storageId)` 全部超时并打断 USB。
+
+### 结论
+
+A7M2 这条链路我们已经走到"事件能收、句柄能拿到、但对象没有数据"。
+剩下缺的是**让相机把图像真正交给 host 的那一步**（某个属性/命令的确切编码），
+它被包在像素蛋糕的 VM（`libCC…so`）里，靠猜参数代价很高 —— 每次猜错都要重插相机。
+
+可选的下一步：
+
+1. **Frida 插桩像素蛋糕**，直接 dump `bulkTransfer` 的收发字节（需要 root，或把 APK 重打包注入 gadget）。
+   这是唯一能一次性拿到完整命令序列的办法。
+2. 继续黑盒试探（每轮 20 分钟构建 + 一次重插），命中概率低。
+3. 接受现状：联机 + 监看（10fps）+ 远程快门；照片用读卡器 / 相机 Wi-Fi。
