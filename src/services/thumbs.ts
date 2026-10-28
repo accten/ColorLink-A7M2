@@ -56,7 +56,13 @@ export async function backfillThumbnails(
   assets: Asset[],
   limit = 6,
 ): Promise<Asset[]> {
-  const pending = assets.filter((asset) => !asset.thumbUri || asset.thumbUri === asset.uri);
+  // 注意：旧数据里的 thumbUri 可能指向一个已经不存在的旧路径，
+  // 只按"是否等于原图"筛选会把这些永远漏掉，所以还要检查文件是否真的在。
+  const pending = assets.filter((asset) => {
+    if (!asset.thumbUri) return true;
+    if (asset.thumbUri === asset.uri) return true;
+    return !exists(asset.thumbUri);
+  });
   if (!pending.length) return assets;
 
   const slice = pending.slice(0, limit);
@@ -67,6 +73,7 @@ export async function backfillThumbnails(
     if (uri) results.set(asset.id, uri);
   }
 
+  eventLog.info('thumb.backfill', { pending: pending.length, made: results.size });
   if (!results.size) return assets;
   return assets.map((asset) => {
     const uri = results.get(asset.id);
