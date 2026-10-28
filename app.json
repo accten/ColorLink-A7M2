@@ -34,8 +34,8 @@
       [
         "expo-media-library",
         {
-          "photosPermission": "允许 ColorLink 读取相册以导出调色结果�?,
-          "savePhotosPermission": "允许 ColorLink 把调色结果保存到相册�?
+          "photosPermission": "允许 ColorLink 读取相册以导出调色结果。",
+          "savePhotosPermission": "允许 ColorLink 把调色结果保存到相册。"
         }
       ],
       "expo-secure-store",
