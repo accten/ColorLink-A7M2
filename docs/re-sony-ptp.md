@@ -98,3 +98,41 @@ USB 传输层同时打开 **bulk in / bulk out / interrupt in** 三个端点，
 3. 回传改成 `0x1009 @ 0xFFFFC001` 直取（不再先 `0x1008`）；
 4. 仍不通时再上 Sony 自有列表 `0x923B/0x923C/0x923D`，最后才考虑 `0x9212` 切 MTP；
 5. 中断端点事件循环作为增强（实时性更好，也不靠猜）。
+
+## 取图链路（从参考实现的调用关系反推）
+
+参考实现的取图不是标准 PTP，而是 Sony 自有的一组操作，调用顺序如下（类名与字段名都可读）：
+
+```
+SonyPtpGetObjectHandlesAction.exec(io):
+  cardId = (storageId >> 16) & 0xFFFF          // 0x00010000 → 1
+  SonyPtpGetRootDirHandlesCommand(camera, cardId)      // 0x923B(cardId) → 根目录 dir handles
+  for (dirHandle in rootHandles):
+      SonyPtpGetAllHandles(camera, dirHandle, cardId, visited)   // 单个目录：handle → HandleInfo
+      recurse(subdirHandle)                                     // 有子目录就继续
+  filterHandlesByFormat(...)                                 // 按 JPEG/ARW/HEIF/视频 过滤
+```
+
+`SonyCameraControl.HandleInfo` 的构造参数是 `(name, handle, format, fd?, size, kind)` 这一类，
+说明 0x923C 返回的条目里带文件名、大小与格式码；`filterHandlesByFormat` 之后再按句柄取原图：
+
+- `SonyPtpGetImageAction` / `SonyPtpGetPartialObjectCommand`（0x923D）
+- 缩略图/预览走 `SonyPtpGetThumbOrPreviewCommand(handle, cardAndFileType, isThumb)`（0x923E）
+
+### 关键更正
+
+之前我们以为 `0x923B` 的参数是完整 storageId（`0x00010000`），**实际是 `storageId >> 16`，也就是 `1`**。
+这条来自 `SonyPtpGetObjectHandlesAction.exec` 的第一行，可信度高。
+
+### 仍在 VM 里的部分
+
+`0x923B` / `0x923C` / `0x923D` / `0x923E` 的 `encodeCommand` / `decodeData` 全部被抽进
+`libCC0000006AA3B68100031FB3A32FD7B1.so`（`CC…vm_void(id, args)`），所以参数与返回结构在 Java 侧看不到。
+我们的做法是：在 App 里内置一个「Sony 协议探测」入口（设置 → 诊断），逐条发操作并打印
+返回码 + 前 256 字节 hex，再离线按字节反推结构 —— 比每次改 Kotlin 重新打包快得多。
+
+下一步（待真机探测数据）：
+
+1. `0x923B(1)` 的返回里数出 dir handle 的布局（count + handles？）
+2. `0x923C` 的返回里定位文件名/大小/格式/句柄字段
+3. 用 `0x923D` 分块读最新一张，落盘后走现有 ingest/调色/导出链路
