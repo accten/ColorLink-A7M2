@@ -38,7 +38,7 @@ internal class SonyCameraController(private val context: Context) {
     private const val DIAGNOSTICS_KEY = "trace"
     private const val MAX_DIAGNOSTICS = 2_000
     private const val MAX_PAYLOAD_DIAGNOSTICS = 200
-    private const val STREAM_METRIC_INTERVAL_MS = 5_000L
+    private const val STREAM_METRIC_INTERVAL_MS = 1_000L
     private const val SCALAR_RECONNECT_DELAY_MS = 750L
     private const val SCALAR_DISCOVERY_COOLDOWN_MS = 2_000L
     private val CONNECT_OPTION_KEYS = setOf("candidateId", "preferredProtocol", "preferredTransport")
@@ -462,13 +462,20 @@ internal class SonyCameraController(private val context: Context) {
             updateState("ready", "该机型不支持 USB 实时取景（PTP2 方言差异），但可以远程快门与回传照片。")
             break
           }
-          if (!error.retryable) {
-            fail(error)
-            break
-          }
+          // 取景流"卡住"（相机睡着、或某一帧读超时）不等于联机失败：
+          // 把取景停掉、会话留着，用户能继续按快门、也能再点一次进入取景。
+          // 以前这里会直接 fail()，于是相机的 USB 端点一卡就整场报废、只能拔插。
+          trace("live view stalled: ${error.message ?: "unknown"}; keeping the session, stopping the stream")
+          streaming.set(false)
+          lastFps = 0.0
+          updateState("ready", "取景中断（相机没有回帧）。可以重新点开始取景，快门与回传仍然可用。")
+          break
         } catch (error: Throwable) {
           if (!streaming.get()) break
-          fail(error)
+          trace("live view failed: ${error.message ?: error::class.java.simpleName}")
+          streaming.set(false)
+          lastFps = 0.0
+          updateState("ready", "取景中断。可以重新点开始取景，快门与回传仍然可用。")
           break
         }
         val remaining = 100L - (SystemClock.elapsedRealtime() - startedAt)
