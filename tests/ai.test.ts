@@ -110,6 +110,23 @@ describe('请求体', () => {
     expect(body.max_tokens).toBeGreaterThan(0);
   });
 
+  it('不支持 JSON 模式的供应商可以去掉 response_format', () => {
+    const plain = buildGradeRequestBody({
+      instruction: '调成胶片感',
+      currentParams: DEFAULT_PARAMS,
+      imageDataUrl: 'data:image/jpeg;base64,AAAA',
+      model: 'some-model',
+      jsonMode: false,
+    }) as Record<string, unknown>;
+    expect(plain.response_format).toBeUndefined();
+    expect(plain.model).toBe('some-model');
+  });
+
+  it('多模态内容结构不变（图片只在 user 消息里）', () => {
+    const user = body.messages.find((m) => m.role === 'user') as { content: { type: string; image_url?: { url: string } }[] };
+    expect(user.content[1].image_url?.url).toBe('data:image/jpeg;base64,AAAA');
+  });
+
   it('图片放在 user 消息的多模态 content 里', () => {
     const user = body.messages.find((m) => m.role === 'user');
     const parts = user?.content as { type: string }[];

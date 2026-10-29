@@ -66,6 +66,8 @@ export interface BuildRequestOptions {
   history?: GradeHistoryItem[];
   detail?: 'low' | 'high' | 'original' | 'auto';
   model?: string;
+  /** 供应商是否支持 response_format=json_object（默认支持；不支持的会在客户端自动降级） */
+  jsonMode?: boolean;
 }
 
 export function buildUserText(opts: Pick<BuildRequestOptions, 'instruction' | 'currentParams' | 'history'>): string {
@@ -85,7 +87,7 @@ export function buildUserText(opts: Pick<BuildRequestOptions, 'instruction' | 'c
     .join('\n');
 }
 
-/** 组装 OpenAI 兼容请求体。key 由调用方放进 Authorization 头（不进日志）。 */
+/** 组装 OpenAI 兼容请求体。key 由调用方放进认证头（不进日志）。 */
 export function buildGradeRequestBody(opts: BuildRequestOptions): Record<string, unknown> {
   return {
     model: opts.model ?? DEEPSEEK_MODEL,
@@ -99,9 +101,10 @@ export function buildGradeRequestBody(opts: BuildRequestOptions): Record<string,
         ],
       },
     ],
-    response_format: { type: 'json_object' },
+    // 不支持 json_object 的供应商会直接 400，客户端收到后去掉这个字段重试
+    ...(opts.jsonMode === false ? {} : { response_format: { type: 'json_object' } }),
     temperature: 0.2,
-    max_tokens: 400,
+    max_tokens: 700,
     stream: false,
   };
 }

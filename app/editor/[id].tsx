@@ -38,6 +38,7 @@ import {
   type CurveSet,
 } from '@/core/curve';
 import { Lut3D } from '@/core/lut';
+import { AiConfig, effectiveAiConfig } from '@/core/aiProvider';
 import { eventLog } from '@/core/log';
 import { Button, Label, ParamRow, Segmented, TabStrip, T } from '@/design/ui';
 import { color, radius, space, typography } from '@/design/tokens';
@@ -377,6 +378,8 @@ function EditorBody({ asset }: { asset: Asset }) {
   );
 
   const dirty = !isNeutral(params) || !isIdentityCurveSet(curves) || Boolean(activeLut);
+  /** 当前 AI 配置（供应商 + 地址 + 模型），设置页随时可改 */
+  const aiConfig = useMemo(() => effectiveAiConfig(settings), [settings]);
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -559,7 +562,8 @@ function EditorBody({ asset }: { asset: Asset }) {
 
         {tab === 'ai' ? (
           <AiPanel
-            asset={asset}
+            config={aiConfig}
+            imageUri={previewSource ?? asset.uri}
             params={params}
             apiKey={apiKey}
             onApply={(next) => setSessionParams(asset.id, next)}
@@ -778,14 +782,16 @@ function PresetsPanel({
 }
 
 function AiPanel({
-  asset,
+  config,
+  imageUri,
   params,
   apiKey,
   onApply,
   onGoSettings,
   notify,
 }: {
-  asset: Asset;
+  config: AiConfig;
+  imageUri: string;
   params: EditParams;
   apiKey: string | null;
   onApply: (params: EditParams) => void;
@@ -797,19 +803,27 @@ function AiPanel({
   const [result, setResult] = useState<{ before: EditParams; after: EditParams; latencyMs: number } | null>(null);
   const historyRef = useRef<{ instruction: string; params: EditParams }[]>([]);
 
+  /** 配置不全或缺 Key 时的原因（空串 = 可以发请求） */
+  const blocked = config.missing
+    ? config.missing
+    : config.requiresKey && !apiKey
+      ? `缺少 ${config.providerName} 的 API Key`
+      : '';
+
   const run = useCallback(
     async (text: string) => {
       const prompt = text.trim();
       if (!prompt || busy) return;
-      if (!apiKey) {
-        notify('warn', '先在设置里填写 DeepSeek API Key');
+      if (blocked) {
+        notify('warn', `${blocked}（设置 → AI 调色）`);
         return;
       }
       setBusy(true);
       try {
         const outcome = await requestGrade({
+          config,
           apiKey,
-          imageUri: asset.uri,
+          imageUri,
           instruction: prompt,
           currentParams: params,
           history: historyRef.current,
@@ -821,23 +835,23 @@ function AiPanel({
         onApply(outcome.params);
         historyRef.current = [...historyRef.current, { instruction: prompt, params: outcome.params }].slice(-5);
         setResult({ before: params, after: outcome.params, latencyMs: outcome.latencyMs });
-        notify('ok', `已应用 AI 参数（${(outcome.latencyMs / 1000).toFixed(1)}s）`);
+        notify('ok', `已应用 AI 参数（${(outcome.latencyMs / 1000).toFixed(1)}s · ${config.providerName}）`);
       } finally {
         setBusy(false);
       }
     },
-    [apiKey, asset.uri, busy, notify, onApply, params],
+    [apiKey, blocked, busy, config, imageUri, notify, onApply, params],
   );
 
   const diff = result ? diffParams(result.before, result.after) : [];
 
   return (
     <View style={{ flex: 1, marginTop: space.md }}>
-      {!apiKey ? (
+      {blocked ? (
         <Pressable onPress={onGoSettings} style={styles.aiBanner}>
           <Ionicons name="key-outline" size={15} color={color.warn} />
           <T variant="monoMuted" style={{ flex: 1 }}>
-            未配置 API Key，AI 调色不可用。点这里去设置。
+            {blocked}，AI 调色不可用。点这里去设置。
           </T>
         </Pressable>
       ) : null}
@@ -891,7 +905,8 @@ function AiPanel({
           </>
         ) : (
           <T variant="monoMuted">
-            用一句自然语言描述目标，DeepSeek 会返回结构化参数并在本地实时应用。原图不会被上传到除 DeepSeek 以外的服务。
+            用一句自然语言描述目标，{config.providerName} 会返回结构化参数并在本地实时应用。
+            图片只发送给你配置的供应商（{config.model}），不会上传到其它服务。
           </T>
         )}
         <View style={{ height: space.lg }} />
