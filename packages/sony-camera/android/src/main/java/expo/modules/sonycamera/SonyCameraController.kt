@@ -380,6 +380,8 @@ internal class SonyCameraController(private val context: Context) {
     val activeFrameExecutor = if (scalarTransport != null) streamExecutor else executor
     frameFuture = activeFrameExecutor.submit {
       var liveViewPrepared = false
+      // 每条取景流只做一次"唤醒 + 重启"，避免无休止地折腾相机
+      var liveViewRecovered = false
       frameCount = 0
       val streamSessionId = java.lang.Long.toString(System.currentTimeMillis(), 36)
       val streamStartedAt = SystemClock.elapsedRealtime()
@@ -466,9 +468,20 @@ internal class SonyCameraController(private val context: Context) {
             updateState("ready", "该机型不支持 USB 实时取景（PTP2 方言差异），但可以远程快门与回传照片。")
             break
           }
-          // 取景流"卡住"（相机睡着、或某一帧读超时）不等于联机失败：
-          // 把取景停掉、会话留着，用户能继续按快门、也能再点一次进入取景。
-          // 以前这里会直接 fail()，于是相机的 USB 端点一卡就整场报废、只能拔插。
+          // 取景流"卡住"（相机睡着、或某一帧读超时）不等于联机失败。
+          // 先尝试唤醒相机并重启推流一次：真机上"放着不动再进取景"只会来一两帧，
+          // 而刚按过快门的那次能稳定 10fps——差别就是相机醒没醒。
+          if (!liveViewRecovered && activeTransport != null) {
+            liveViewRecovered = true
+            trace("live view stalled (${error.message ?: "unknown"}); waking the camera and restarting")
+            activeTransport.wakeCameraByHalfPress()
+            activeTransport.setLiveViewActive(false)
+            SystemClock.sleep(200)
+            activeTransport.setLiveViewActive(true)
+            SystemClock.sleep(600)
+            liveViewPrepared = false
+            continue
+          }
           trace("live view stalled: ${error.message ?: "unknown"}; keeping the session, stopping the stream")
           streaming.set(false)
           lastFps = 0.0

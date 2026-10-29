@@ -652,6 +652,22 @@ internal class SonyPtpTransport private constructor(
     }
   }
 
+  /**
+   * 把相机从"省电"里叫醒：半按一下再松开。
+   *
+   * 真机现象：放着不动一段时间后进取景，相机只给一两帧就不再更新虚拟句柄（黑屏）；
+   * 而刚按过快门的那一次，取景能稳稳跑 10fps、123 帧以上。差别就是相机醒没醒。
+   * 半按是最轻的唤醒动作，不会拍照。
+   */
+  fun wakeCameraByHalfPress() {
+    runCatching {
+      setButton(PROPERTY_HALF_PRESS_BUTTON, 2)
+      SystemClock.sleep(120)
+      setButton(PROPERTY_HALF_PRESS_BUTTON, 1)
+      trace("woke the camera with a half press")
+    }.onFailure { trace("half-press wake failed: ${it.message ?: "unknown"}") }
+  }
+
   fun prepareLiveView() {
     // 先按参考实现的最短路径试：直接 GetObject(0x1009) @ 0xFFFFC002。
     // 这台机身在相机已经"醒着推流"时一下就能成（手机实测 10fps 走的就是这条）。
