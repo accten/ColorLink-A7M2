@@ -74,7 +74,18 @@ internal class SonyPtpTransport private constructor(
      */
     private const val SONY_PROTOCOL_EXTENDED = 0x012C
     private const val MAX_CONTAINER_BYTES = 100 * 1024 * 1024
-    private const val MAX_USB_READ_BYTES = 256 * 1024
+
+    /**
+     * 单次 bulk-IN 最多读多少字节。
+     *
+     * **不要往上调。** 试过 256KB：OPPO Pad 4 Pro 的 USB 主控对超过 64KB 的读请求会直接回
+     * `bulkTransfer = -1`（十几毫秒就返回，是 URB 被拒，不是 5s 超时），随后连 bulk-OUT
+     * 也一起失败，整条链路死掉、只能拔插相机。实测：64KB 时取景连推 193 帧稳定；
+     * 256KB 时取景第一次 `0x1009` 就 5 次重试全 -1，状态栏停在 LIVE 0 FPS。
+     *
+     * 一次 4.7MB 的照片回传用 64KB 也就是七十来次往返（约 150ms），没必要为这点时间赌链路。
+     */
+    private const val MAX_USB_READ_BYTES = 64 * 1024
 
     /** 属性轮询连续失败几次就停用（宁可不显示参数，也不能把联机读死） */
     private const val MAX_EXPOSURE_POLL_FAILURES = 3

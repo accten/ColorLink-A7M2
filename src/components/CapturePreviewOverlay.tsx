@@ -41,7 +41,7 @@ export function CapturePreviewOverlay() {
     }).start();
     const timer = setTimeout(() => {
       Animated.timing(fade, { toValue: 0, duration: 200, useNativeDriver: true }).start(({ finished }) => {
-        // 淡出被打断（比如又来一张)时不要清掉新的那张
+        // 淡出被打断（比如又来一张）时不要清掉新的那张
         if (finished) dismiss();
       });
     }, preview.seconds * 1000);
