@@ -405,4 +405,19 @@ USB bulk-OUT failed op=0x9205 tx=20 result=-1 at=0/16              ← 之后连
 `setValue` 直接改值）。`react-hooks/refs` 这条规则无法区分"渲染期读 ref"和"事件回调里读 ref"，
 在文件头显式关掉并注明原因。
 
+### 9.10 返回键 / 回传画质 / 编辑面板间距（v0.2.4）
+
+- **返回键只退预览**：`PreviewStage` 挂 `BackHandler`，返回 true 消费掉；不然因为预览在根布局
+  最外层，按返回会一路退到桌面。
+- **回传画质**：设置里新增「JPEG / RAW / JPEG+RAW」，写相机 `0xD253 CompressionSetting`（UINT8，
+  1 = RAW / 2 = RAW+JPEG / 3 = JPEG，取值来自 libgphoto2 的 `sony_300_compression` 表，
+  "Sony 300" 就是 SDIO 协议 `0x012C`）。ILCE-7M2 的属性数组里没有 D253，写入会被拒，
+  这时原生返回 `supported=false`，App 弹提示让用户去相机菜单改 —— 不假装成功。
+- **编辑面板间距**：真机 dump 量到「光/色/HSL…」标签条高 **341px（130dp）**，而内容只有 78px：
+  横向 `ScrollView` 放在 flex 列里会被拉满剩余高度，于是标签条和参数之间空出一大截。
+  给标签条加 `style={{ flexGrow: 0, flexShrink: 0 }}` 后按内容高度收住，同时把分组栏的
+  `marginTop` 从 8dp 收到 4dp、参数列表不再额外留白。
+
+
+
 

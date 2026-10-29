@@ -8,6 +8,7 @@ import { eventLog } from '@/core/log';
 import { AI_PROVIDERS, effectiveAiConfig, findProvider, normalizeAiBaseUrl } from '@/core/aiProvider';
 import { PREVIEW_SECONDS_OPTIONS, previewSecondsLabel } from '@/core/capturePreview';
 import { CAPTURE_TARGET_OPTIONS } from '@/core/captureTarget';
+import { CAPTURE_FORMAT_OPTIONS } from '@/core/captureFormat';
 import { Button, Card, Banner, Hairline, Label, Row, Screen, Segmented, Sheet, T } from '@/design/ui';
 import { color, radius, space, typography } from '@/design/tokens';
 import { logFile, writeTextAtomic } from '@/services/paths';
@@ -392,6 +393,25 @@ export default function SettingsScreen() {
           <T variant="monoMuted" style={{ marginTop: space.xs }}>
             实测 ILCE-7M2 在 USB「PC 遥控」模式下三个值都不会写卡（固件行为，App 改不动）；
             这一项留给支持「PC + 存储卡」的机型。
+          </T>
+          <Hairline />
+          <T variant="body" style={{ marginVertical: space.sm }}>
+            回传画质
+          </T>
+          <Segmented
+            value={String(settings.captureFormat)}
+            options={CAPTURE_FORMAT_OPTIONS.map((option) => ({
+              value: String(option.value),
+              label: option.label,
+            }))}
+            onChange={(v) => void updateSettings({ captureFormat: Number(v) })}
+          />
+          <T variant="monoMuted" style={{ marginTop: space.sm }}>
+            {CAPTURE_FORMAT_OPTIONS.find((o) => o.value === settings.captureFormat)?.hint ?? ''}
+          </T>
+          <T variant="monoMuted" style={{ marginTop: space.xs }}>
+            写的是相机 0xD253。ILCE-7M2 的属性表里没有这一条，写入会被拒——那种情况请在相机
+            MENU → 影像质量 里改。
           </T>
           <Hairline />
           <Row

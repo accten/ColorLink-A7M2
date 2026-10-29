@@ -69,6 +69,19 @@ internal class SonyPtpTransport private constructor(
     internal val CAPTURE_TARGET_VALUES = setOf(1, 17, 16)
 
     /**
+     * 画质（CompressionSetting，`0xD253`，UINT8）。
+     *
+     * 取值来自 libgphoto2 的 `sony_300_compression` 表（"Sony 300" 就是 SDIO 协议 0x012C，
+     * 也是我们和机身协商的版本）：1 = RAW，2 = RAW+JPEG，3 = JPEG。
+     * 注意：ILCE-7M2 的属性数组里**没有**列出 D253，写它可能被拒（0x200A）——
+     * 所以失败时上层要照实告诉用户"这台机身不支持通过 USB 改画质"。
+     */
+    internal const val PROPERTY_CAPTURE_FORMAT = 0xD253
+    internal const val CAPTURE_FORMAT_JPEG = 3
+    internal const val CAPTURE_FORMAT_DEFAULT = CAPTURE_FORMAT_JPEG
+    internal val CAPTURE_FORMAT_VALUES = setOf(1, 2, 3)
+
+    /**
      * SDIO_GetExtDeviceInfo(0x9202) 第一个参数：向机身申请 PTP 3.00 扩展协议。
      *
      * 之前这里传的是 0x00C8(200)，机身按 200 回包，返回的"扩展操作/属性/事件清单"是空的，
@@ -437,6 +450,25 @@ internal class SonyPtpTransport private constructor(
     execute(0x9205, intArrayOf(PROPERTY_CAPTURE_TARGET), outgoingData = le16(safe))
     trace("D222 capture target = 0x%04X".format(safe))
   }
+
+  /**
+   * 写画质 `0xD253`：1 = RAW，2 = RAW+JPEG，3 = JPEG。
+   *
+   * 返回 true 表示机身接受了这次写入；false 表示这台机身不支持（`0x200A` 之类），
+   * 上层应提示"请在相机菜单里改画质"，而不是假装成功。
+   */
+  fun setCaptureFormat(value: Int): Boolean {
+    if (value !in CAPTURE_FORMAT_VALUES) return false
+    return runCatching {
+      execute(0x9205, intArrayOf(PROPERTY_CAPTURE_FORMAT), outgoingData = byteArrayOf(value.toByte()))
+      trace("D253 capture format = $value")
+    }.onFailure {
+      trace("D253 capture format=$value rejected: ${it.message ?: "unknown"}")
+    }.isSuccess
+  }
+
+  /** 读回当前画质；机身不支持这条属性时返回 null。 */
+  fun captureFormat(): Long? = readPropertyValue(PROPERTY_CAPTURE_FORMAT)
 
   /** One `0x9209` read: the camera's whole property array, or null when it refused. */
   private fun readPropertyBlob(maxReadRetries: Int = MAX_READ_RETRIES): ByteArray? {

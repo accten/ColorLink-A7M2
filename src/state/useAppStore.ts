@@ -255,9 +255,12 @@ export const useAppStore = create<AppState>((set, get) => {
       const snapshot = await next.connect();
       set({ camera: snapshot, cameraBusy: false });
       eventLog.info('camera.ready', { mode, model: snapshot.info?.model ?? 'unknown' });
-      // 联机成功后把「照片保存位置」应用到相机（未联机时原生侧只记值）
+      // 联机成功后把「照片保存位置」和「画质」应用到相机（未联机时原生侧只记值）
       if (next.setCaptureTarget) {
         void next.setCaptureTarget(get().settings.captureTarget).catch(() => {});
+      }
+      if (next.setCaptureFormat) {
+        void next.setCaptureFormat(get().settings.captureFormat).catch(() => {});
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -605,6 +608,17 @@ export const useAppStore = create<AppState>((set, get) => {
       // 「照片保存位置」改了要立刻写给相机，否则要等下次联机才生效
       if (patch.captureTarget !== undefined && transport?.setCaptureTarget) {
         void transport.setCaptureTarget(next.captureTarget).catch(() => {});
+      }
+      // 画质同理；机身不支持时就地提示，别让用户以为改成功了
+      if (patch.captureFormat !== undefined && transport?.setCaptureFormat) {
+        void transport
+          .setCaptureFormat(next.captureFormat)
+          .then((supported) => {
+            if (!supported) {
+              notify('warn', '这台机身不支持通过 USB 改画质，请在相机菜单里改');
+            }
+          })
+          .catch(() => {});
       }
     },
 

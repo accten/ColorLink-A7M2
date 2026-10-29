@@ -5,6 +5,7 @@ import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
+  BackHandler,
   Easing,
   PanResponder,
   Pressable,
@@ -237,6 +238,15 @@ function PreviewStage({ preview }: { preview: CapturePreview }) {
     },
     [],
   );
+
+  // 系统返回键：只退出预览，不退出 App（预览在最外层，不拦就会一路退到桌面）
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      close();
+      return true;
+    });
+    return () => subscription.remove();
+  }, [close]);
 
   const persistent = isPersistentPreview(preview.seconds);
 

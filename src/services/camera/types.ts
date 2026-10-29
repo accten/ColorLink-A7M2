@@ -93,6 +93,8 @@ export interface ICameraTransport {
    * 实现方要保证"未联机时只记住值、联机后应用"。
    */
   setCaptureTarget?(value: number): Promise<void>;
+  /** 画质（相机端 0xD253）：1 = RAW，2 = RAW+JPEG，3 = JPEG；返回机身是否接受 */
+  setCaptureFormat?(value: number): Promise<boolean>;
   snapshot(): CameraSnapshot;
   subscribe(listener: (snapshot: CameraSnapshot) => void): () => void;
   onPhoto(listener: (photo: CapturedPhoto) => void): () => void;

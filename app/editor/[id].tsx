@@ -679,7 +679,7 @@ function AdjustPanel({
               </T>
             </Pressable>
           </View>
-          <ScrollView style={{ flex: 1, marginTop: space.xs }} showsVerticalScrollIndicator={false}>
+          <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
             {keys.map((key) => (
               <ParamRow
                 key={key}
@@ -947,7 +947,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: space.sm,
+    marginTop: space.xs,
+    marginBottom: space.xs,
   },
   root: { flex: 1, backgroundColor: color.bg },
   missing: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: color.bg },

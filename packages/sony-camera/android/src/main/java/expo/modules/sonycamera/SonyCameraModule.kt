@@ -52,6 +52,9 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
     // 拍摄目标（照片存到主机 / 卡 / 两边）：写 0xD222，设置页用
     AsyncFunction("setCaptureTarget") { value: Int -> controller.setCaptureTargetBlocking(value) }
 
+    // 画质（JPEG / RAW / RAW+JPEG）：写 0xD253，机身不支持时返回 supported=false
+    AsyncFunction("setCaptureFormat") { value: Int -> controller.setCaptureFormatBlocking(value) }
+
     // 诊断：直接发一条 Sony 厂商操作（逆向取图协议时用）
     AsyncFunction("probeVendorOp") { operation: Int, params: List<Int>?, dataHex: String? ->
       val data = dataHex

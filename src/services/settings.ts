@@ -3,6 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import { DEFAULT_PROVIDER_ID, findProvider, normalizeAiBaseUrl } from '@/core/aiProvider';
 import { DEFAULT_PREVIEW_SECONDS, normalizePreviewSeconds } from '@/core/capturePreview';
 import { DEFAULT_CAPTURE_TARGET, normalizeCaptureTarget } from '@/core/captureTarget';
+import { DEFAULT_CAPTURE_FORMAT, normalizeCaptureFormat } from '@/core/captureFormat';
 import { normalizeLongEdge } from '@/core/exportOptions';
 import { readTextSafe, settingsFile, writeTextAtomic } from './paths';
 
@@ -27,6 +28,8 @@ export interface Settings {
   previewSeconds: number;
   /** 照片保存位置（相机 0xD222）：仅平板 / 两边都存 / 仅存储卡；见 core/captureTarget */
   captureTarget: number;
+  /** 画质（相机 0xD253）：JPEG / RAW / JPEG+RAW；见 core/captureFormat */
+  captureFormat: number;
   haptics: boolean;
   demoMode: boolean;
   showGrid: boolean;
@@ -43,6 +46,7 @@ export const DEFAULT_SETTINGS: Settings = {
   jpegQuality: 92,
   previewSeconds: DEFAULT_PREVIEW_SECONDS,
   captureTarget: DEFAULT_CAPTURE_TARGET,
+  captureFormat: DEFAULT_CAPTURE_FORMAT,
   haptics: true,
   demoMode: true,
   showGrid: false,
@@ -73,6 +77,7 @@ export async function loadSettings(): Promise<Settings> {
       jpegQuality: clampNumber(parsed.jpegQuality, 60, 100, DEFAULT_SETTINGS.jpegQuality),
       previewSeconds: normalizePreviewSeconds(parsed.previewSeconds),
       captureTarget: normalizeCaptureTarget(parsed.captureTarget),
+      captureFormat: normalizeCaptureFormat(parsed.captureFormat),
       // 供应商 id 不存在（旧版本 / 手改配置）时回落到默认
       aiProviderId: providerId,
       aiBaseUrl: normalizeAiBaseUrl(parsed.aiBaseUrl),

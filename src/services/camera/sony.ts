@@ -332,6 +332,26 @@ export class SonyCameraTransport implements ICameraTransport {
     }
   }
 
+  /**
+   * 画质（相机 `0xD253`）。返回 false 表示这台机身不支持通过 USB 改（ILCE-7M2 就是这样）。
+   * 失败只记日志，不抛给调用方。
+   */
+  async setCaptureFormat(value: number): Promise<boolean> {
+    const native = SonyCamera;
+    if (!native?.setCaptureFormat) return false;
+    try {
+      const result = await native.setCaptureFormat(value);
+      const supported = result?.supported !== false;
+      eventLog.info('camera.captureFormat', { value, supported });
+      return supported;
+    } catch (error) {
+      eventLog.warn('camera.captureFormat.failed', {
+        value,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
   async startLiveView(): Promise<void> {
     const state = await this.requireModule().startLiveView();
     this.applyState(state);

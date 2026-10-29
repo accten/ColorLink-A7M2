@@ -340,6 +340,9 @@ internal class SonyCameraController(private val context: Context) {
       // 照片存到哪（主机 / 卡 / 两边）由用户在设置里选，默认 17（出厂值）
       runCatching { next.setCaptureTarget(captureTarget) }
         .onFailure { trace("could not apply capture target: ${it.message ?: "unknown"}") }
+      // 画质（JPEG / RAW / RAW+JPEG）：机身不支持就只记一条日志，不打断联机
+      val formatApplied = runCatching { next.setCaptureFormat(captureFormat) }.getOrDefault(false)
+      trace("capture format=$captureFormat applied=$formatApplied")
       transport = next
       // 读中断端点：相机拍完会推 ObjectAdded(0xC201)，参数里带新对象句柄
       next.startEventLoop()
@@ -816,6 +819,22 @@ internal class SonyCameraController(private val context: Context) {
 
   /** `0xD222`：照片存哪儿。1/16/17 为合法枚举，默认 17；联机后由 JS 侧按设置覆盖。 */
   @Volatile private var captureTarget = SonyPtpTransport.CAPTURE_TARGET_DEFAULT
+
+  /** `0xD253`：画质。1 = RAW，2 = RAW+JPEG，3 = JPEG（默认）；联机后由 JS 侧按设置覆盖。 */
+  @Volatile private var captureFormat = SonyPtpTransport.CAPTURE_FORMAT_DEFAULT
+
+  /**
+   * 设置画质（`0xD253`）。已联机时立刻写；返回 `supported` 表示机身有没有接受这次写入。
+   *
+   * 老机身（ILCE-7M2）的属性数组里没有 D253，写入会被拒 —— 这时上层提示去相机菜单里改，
+   * 不能假装成功。
+   */
+  fun setCaptureFormatBlocking(value: Int): Map<String, Any?> {
+    captureFormat = value
+    val active = transport ?: return mapOf("supported" to true, "value" to value)
+    val supported = runCatching { active.setCaptureFormat(value) }.getOrDefault(false)
+    return mapOf("supported" to supported, "value" to value)
+  }
 
   /**
    * 设置「照片保存位置」：`0xD222`。已联机时立刻生效，下次联机沿用这个值。

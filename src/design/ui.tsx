@@ -370,6 +370,9 @@ export function TabStrip<T extends string>({
     <ScrollView
       horizontal
       showsHorizontalScrollIndicator={false}
+      // 不给高度就会在列布局里被拉满：横向 ScrollView 在 flex 列里会吃满剩余高度，
+      // 表现为"标签条和下面的参数之间空出一大截"（真机量到过 130dp 的空白）。
+      style={styles.tabStripBox}
       contentContainerStyle={styles.tabStrip}
       keyboardShouldPersistTaps="handled"
     >
@@ -699,6 +702,7 @@ export const styles = StyleSheet.create({
     borderColor: color.hairlineStrong,
   },
   tabStrip: { gap: 6, paddingRight: space.lg, paddingVertical: 2 },
+  tabStripBox: { flexGrow: 0, flexShrink: 0 },
   tabChip: {
     height: 30,
     paddingHorizontal: space.md,
