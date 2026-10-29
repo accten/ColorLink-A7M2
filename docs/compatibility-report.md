@@ -554,3 +554,42 @@ captured JPEG persisted / camera.photo.saved（只一次）
 
 MF 下机身照样会开火，所以 AF 合不了焦时切 MF 是最省事的绕法；
 AF 模式下"D213 一直是 1"则说明机身不会开火，新版本会直接报「相机没有合焦，快门没触发」。
+## 15. 机身快门回传（2026-10-29 20:10，真机验证通过）
+
+需求：**在相机上按快门，照片也要自动回到平板**。
+
+做法：相机自己按快门时，机身在中断端点推 `ObjectAdded(0xC201)`，参数就是内存对象的虚拟句柄
+`0xFFFFC001`。这条事件我们一直在收（只记日志），现在由一条监听线程接管：
+
+```
+事件线程：0xC201 → 记下 pendingExternalHandle
+监听线程：takePendingExternalCapture()
+          → 若正在取景，先停流（整读大对象和取景帧抢同一个 bulk 端点）
+          → 等 400ms 让相机写完
+          → 0x1008（拿大小/文件名）→ 0x1009（整读），失败再试一轮
+          → 走原入库路径（图库 + 缩略图 + onPhotoCaptured）
+          → 恢复取景
+```
+
+App 自己按快门时走原路径，并清掉待取句柄，两条路不会把同一张取两次。
+
+真机日志：
+
+```
+20:10:12.322 PTP event code=0xC201 params=0xFFFFC001
+20:10:12.355 body shutter: object FFFFC001 announced; fetching
+20:10:12.887 object info handle=FFFFC001 format=0x3801 bytes=4743249 name=DSC01026.JPG
+20:10:13.088 getObject 0x1009 handle=FFFFC001 code=0x2001 bytes=4743249
+20:10:13.246 captured JPEG persisted bytes=4743249
+20:10:13.247 state=ready "已取回相机上拍的那一张。"
+20:10:13.248 startLiveView（取景自动恢复，随后 193 帧 / 10fps）
+```
+
+图库出现 `20261029_201013_001.jpg · 6000×4000 · 4.5MB`（"全部 15"，原 14）。
+
+### 附带确认的一条环境坑
+
+"相机不再应答、拔插也没用"的那个状态，这次查到了**中间有一个 USB Hub**（sysfs 里
+`1-1` 是 hub、`1-1.x` 才是相机）。外接供电的 hub 不会随平板重启或相机断电而复位，
+它的 IN 通道一旦卡住，表现就是"写入能过、读取一直 `-1`"。解法是给 hub 断电
+（拔掉它的电源和到平板的线），或者把相机直插平板。
