@@ -8,6 +8,7 @@ import {
   TileMode,
   type SkImage,
   type SkRuntimeEffect,
+  type SkSurface,
 } from '@shopify/react-native-skia';
 
 import { Lut3D, identityLut, packLut } from '@/core/lut';
@@ -79,6 +80,24 @@ export function decodeImage(bytes: Uint8Array): SkImage | null {
  * 96MB 显存，低端机直接 OOM。导出走的是另一条路径（重新从文件解码原图），
  * 所以这里放心降。
  */
+/**
+ * 缩放下采样用的 surface。
+ *
+ * 大图（长边 > 4096）在 GPU 上无法作为纹理被采样，`MakeOffscreen` 画出来是全黑：
+ * 真机实测 6000×4000 的相机原图，编辑器预览纯黑、直方图几乎为空。
+ * CPU 光栅 surface 没有这个纹理上限，只在大图上用它；小图仍走 GPU（更快）。
+ *
+ * @param longEdge 源图长边
+ */
+const GPU_TEXTURE_SAFE_EDGE = 4096;
+
+function makeScalingSurface(width: number, height: number, longEdge: number): SkSurface | null {
+  if (longEdge > GPU_TEXTURE_SAFE_EDGE) {
+    const raster = Skia.Surface.Make(width, height);
+    if (raster) return raster;
+  }
+  return Skia.Surface.MakeOffscreen(width, height);
+}
 export function makePreviewImage(image: SkImage, maxLongEdge = 1440): SkImage {
   const sourceWidth = image.width();
   const sourceHeight = image.height();
@@ -88,7 +107,7 @@ export function makePreviewImage(image: SkImage, maxLongEdge = 1440): SkImage {
   const scale = maxLongEdge / longEdge;
   const width = Math.max(1, Math.round(sourceWidth * scale));
   const height = Math.max(1, Math.round(sourceHeight * scale));
-  const surface = Skia.Surface.MakeOffscreen(width, height);
+  const surface = makeScalingSurface(width, height, longEdge);
   if (!surface) return image;
   surface.getCanvas().drawImageRectOptions(
     image,
@@ -125,7 +144,7 @@ export function computeHistogram(image: SkImage): Histogram | null {
     const width = Math.max(1, Math.round(image.width() * scale));
     const height = Math.max(1, Math.round(image.height() * scale));
 
-    const surface = Skia.Surface.MakeOffscreen(width, height);
+    const surface = makeScalingSurface(width, height, Math.max(image.width(), image.height(), 1));
     if (!surface) return null;
     surface.getCanvas().drawImageRectOptions(
       image,
@@ -190,7 +209,7 @@ export function renderGradedJpeg(options: RenderOptions): Uint8Array {
   // 第一趟：重采样到目标尺寸（仅在需要时）
   let base: SkImage = options.image;
   if (needsResample) {
-    const resampleSurface = Skia.Surface.MakeOffscreen(width, height);
+    const resampleSurface = makeScalingSurface(width, height, Math.max(sourceWidth, sourceHeight));
     if (!resampleSurface) throw new Error(`无法创建 ${width}×${height} 的离屏画布（显存不足）`);
     const resampleCanvas = resampleSurface.getCanvas();
     resampleCanvas.drawImageRectOptions(
@@ -203,8 +222,8 @@ export function renderGradedJpeg(options: RenderOptions): Uint8Array {
     base = resampleSurface.makeImageSnapshot();
   }
 
-  // 第二趟：1:1 纹理 + 调色 shader
-  const surface = Skia.Surface.MakeOffscreen(width, height);
+  // 第二趟：1:1 纹理 + 调色 shader（导出原图尺寸时同样受纹理上限约束）
+  const surface = makeScalingSurface(width, height, Math.max(width, height));
   if (!surface) throw new Error(`无法创建 ${width}×${height} 的离屏画布（显存不足）`);
 
   const canvas = surface.getCanvas();
