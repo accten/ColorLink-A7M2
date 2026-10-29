@@ -631,8 +631,6 @@ internal class SonyPtpTransport private constructor(
     return SonyObjectInfo(size = size, format = format, name = name)
   }
 
-  }
-
   fun prepareLiveView() {
     // 参考实现的取景路径：直接 GetObject(0x1009) @ 0xFFFFC002，没有 D221 门禁。
     if (getObjectDirect(HANDLE_LIVE_VIEW) != null) {

@@ -32,6 +32,19 @@ $out = Join-Path $Jars 'classes'
 Remove-Item $out -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 
+# 便宜的护栏：这里只编译"不碰 android.*"的文件，所以语法/括号类错误（例如多加一个 }
+# 把类提前闭合）在这一步看不到。整个模块的 .kt 先做一遍花括号配平检查。
+$allKotlin = Get-ChildItem (Join-Path $repo 'packages\sony-camera\android\src') -Recurse -Filter '*.kt'
+foreach ($file in $allKotlin) {
+  $text = [IO.File]::ReadAllText($file.FullName)
+  $open = ($text.ToCharArray() | Where-Object { $_ -eq '{' }).Count
+  $close = ($text.ToCharArray() | Where-Object { $_ -eq '}' }).Count
+  if ($open -ne $close) {
+    throw "花括号不配平：$($file.Name) { = $open, } = $close"
+  }
+}
+"brace check ok on $($allKotlin.Count) files"
+
 # 只编"不碰 android.*"的文件：这样测试能在 JVM 上直接跑
 $files = @(
   (Join-Path $src 'SonyPtpCodec.kt'),
