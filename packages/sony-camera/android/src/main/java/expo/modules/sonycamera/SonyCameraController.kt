@@ -39,6 +39,22 @@ internal class SonyCameraController(private val context: Context) {
     private const val MAX_DIAGNOSTICS = 2_000
     private const val MAX_PAYLOAD_DIAGNOSTICS = 200
     private const val STREAM_METRIC_INTERVAL_MS = 1_000L
+
+    /**
+     * 取景读不到帧时最多重试几次就收手。
+     *
+     * 真机上相机在写卡/回放时会连续回 AccessDenied：以前按 10Hz 无脑重试，几分钟堆了几千条，
+     * 期间相机连 ObjectAdded 都不发，机身快门拍的照片就丢了。退避到 1s 一档后 20 次约 17 秒，
+     * 够覆盖"写一张 24MP 的时间"，再久就是真卡住，应该停流让用户手动重开。
+     */
+    private const val MAX_EMPTY_FRAME_READS = 20
+
+    /** 机身快门兜底：每 N 次监听循环(~1s/次)查一次 D215，防止丢了 0xC201 就永远取不到 */
+    private const val BODY_SHUTTER_D215_POLL_EVERY = 5
+
+    /** 兜底取图后的冷却：别在相机还没清理干净时连取两次同一张 */
+    private const val BODY_SHUTTER_FETCH_COOLDOWN_MS = 3_000L
+
     private const val SCALAR_RECONNECT_DELAY_MS = 750L
     private const val SCALAR_DISCOVERY_COOLDOWN_MS = 2_000L
     private val CONNECT_OPTION_KEYS = setOf("candidateId", "preferredProtocol", "preferredTransport")
@@ -393,6 +409,8 @@ internal class SonyCameraController(private val context: Context) {
       var totalBytes = 0L
       var lastFrameAt = 0L
       var largestFrameGapMs = 0L
+      /** 连续"没读到帧"的次数：相机忙的时候用来退避，见下面的 else 分支 */
+      var emptyFrameReads = 0
       trace("stream session=$streamSessionId started protocol=${if (scalarTransport != null) "scalar" else "ptp2"}")
       while (streaming.get()) {
         var startedAt = SystemClock.elapsedRealtime()
@@ -421,6 +439,7 @@ internal class SonyCameraController(private val context: Context) {
           }
           val jpeg = activeScalar?.getLiveViewJpeg() ?: activeTransport?.getLiveViewJpeg()
           if (jpeg != null && jpeg.isNotEmpty()) {
+            emptyFrameReads = 0
             val receivedAt = SystemClock.elapsedRealtime()
             if (lastFrameAt > 0) largestFrameGapMs = maxOf(largestFrameGapMs, receivedAt - lastFrameAt)
             lastFrameAt = receivedAt
@@ -462,6 +481,20 @@ internal class SonyCameraController(private val context: Context) {
               }
               listeners.forEach { it.onStateChanged(statePayload()) }
             }
+          } else {
+            // 相机在忙（写卡、回放、或者干脆不给取景）时会回 AccessDenied，读不到帧。
+            // 这时候按 10Hz 硬怼是有害的：真机上连按几千次之后，相机既不回帧、也不发
+            // ObjectAdded(0xC201)，机身快门拍的照片就再也回不来了。所以这里退避 + 到点收手。
+            emptyFrameReads += 1
+            if (emptyFrameReads == 1) trace("no live-view frame; backing off")
+            if (emptyFrameReads >= MAX_EMPTY_FRAME_READS) {
+              trace("no live-view frame for $emptyFrameReads reads; stopping the stream")
+              streaming.set(false)
+              lastFps = 0.0
+              updateState("ready", "取景中断（相机一直没有回帧，可能正忙）。可以重新点开始取景。")
+              break
+            }
+            SystemClock.sleep(emptyFrameBackoffMs(emptyFrameReads))
           }
         } catch (error: SonyPtpException) {
           if (!streaming.get()) break
@@ -726,6 +759,7 @@ internal class SonyCameraController(private val context: Context) {
     bodyShutterWatcherRunning = true
     bodyShutterWatcher = Thread({
       trace("body-shutter watcher started")
+      var idleLoops = 0
       while (bodyShutterWatcherRunning) {
         val active = transport
         if (active == null) {
@@ -734,9 +768,19 @@ internal class SonyCameraController(private val context: Context) {
         }
         val handle = runCatching { active.takePendingExternalCapture() }.getOrNull()
         if (handle == null) {
+          // 事件未必一定来：真机上机身按快门可能只发属性变化(0xC203)，没有 0xC201。
+          // 兜底：隔一秒问一次「相机内存里有没有照片」(D215)，有就按机身快门那张取回，
+          // 否则一旦事件丢了，那张照片就永远回不来（用户看到的就是"按了没反应"）。
+          idleLoops += 1
+          if (idleLoops >= BODY_SHUTTER_D215_POLL_EVERY) {
+            idleLoops = 0
+            runCatching { fetchInMemoryShotIfAny(active) }
+              .onFailure { trace("body shutter fallback failed: ${it.message ?: it::class.java.simpleName}") }
+          }
           SystemClock.sleep(200)
           continue
         }
+        idleLoops = 0
         // App 自己按的快门有自己的路径，别两条路抢同一张
         if (state == "capturing") {
           active.clearPendingExternalCapture()
@@ -754,6 +798,33 @@ internal class SonyCameraController(private val context: Context) {
     bodyShutterWatcherRunning = false
     bodyShutterWatcher?.interrupt()
     bodyShutterWatcher = null
+  }
+
+  /** 上次兜底取图的时间：同一张不要被连取两次 */
+  private var lastBodyFetchAt = 0L
+
+  /**
+   * 机身快门的兜底通道：`0xC201` 丢了也能把照片取回来。
+   *
+   * 只在"没在按 App 快门、也没有待取句柄"时调用（监听线程串行执行），并带冷却。
+   * 判据是 `D215 >= 0x8000`（相机内存里已经有一张拍好的照片），此时按机身快门那张处理。
+   */
+  private fun fetchInMemoryShotIfAny(active: SonyPtpTransport) {
+    if (state == "capturing") return
+    val now = SystemClock.elapsedRealtime()
+    if (now - lastBodyFetchAt < BODY_SHUTTER_FETCH_COOLDOWN_MS) return
+    val inMemory = active.objectInMemory() ?: return
+    if (inMemory < 0x8000) return
+    trace("body shutter fallback: D215=0x%04X but no ObjectAdded; fetching".format(inMemory))
+    lastBodyFetchAt = now
+    handleBodyShutterCapture(active, active.capturedImageHandle)
+  }
+
+  /** 取景读不到帧时的退避：300ms / 600ms / 1s 封顶 */
+  private fun emptyFrameBackoffMs(emptyReads: Int): Long = when {
+    emptyReads <= 1 -> 300L
+    emptyReads <= 3 -> 600L
+    else -> 1_000L
   }
 
   private fun handleBodyShutterCapture(active: SonyPtpTransport, handle: Int) {

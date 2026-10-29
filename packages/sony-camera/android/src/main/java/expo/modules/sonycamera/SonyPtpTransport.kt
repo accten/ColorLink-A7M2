@@ -321,6 +321,12 @@ internal class SonyPtpTransport private constructor(
   /** 按句柄取回一整个对象（机身快门用）：先 `0x1008`，再 `0x1009`，失败退分块读。 */
   fun fetchObject(handle: Int): ByteArray? = getObjectPayload(handle)
 
+  /** 相机内存缓存里那张回传照片的句柄（`0xFFFFC001`）。 */
+  val capturedImageHandle: Int get() = HANDLE_CAPTURED_IMAGE
+
+  /** `D215 ObjectInMemory`：>= 0x8000 表示相机内存里已经有一张拍好的照片。 */
+  fun objectInMemory(): Long? = readPropertyValue(PROPERTY_OBJECT_IN_MEMORY)
+
   /** Populated during [authenticate]; null when the camera refused `GetDeviceInfo`. */
   var deviceInfo: SonyDeviceInfo? = null
     private set
