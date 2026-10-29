@@ -628,6 +628,13 @@ internal class SonyPtpTransport private constructor(
           info.name,
         ),
       )
+      // RAW+JPEG 时 `0xFFFFC001` 会先交 JPEG、读走之后再交 ARW。ARW 里带一张嵌入预览，
+      // BitmapFactory 也能读出尺寸，一旦落盘就是一张 24MB 的假 .jpg（真机踩到两次）。
+      // 这里统一拦掉：所有取图路径（App 快门、机身快门、取景期的轮询）都走这个函数。
+      if (!SonyPtpCodec.isJpegObjectFormat(info.format)) {
+        trace("skip non-JPEG object format=0x%04X (%s)".format(info.format, info.name))
+        return null
+      }
     }
 
     val result = execute(

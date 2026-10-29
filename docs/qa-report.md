@@ -324,4 +324,21 @@ USB bulk-OUT failed op=0x9205 tx=20 result=-1 at=0/16              ← 之后连
 - 校验：`tests/capture-target.test.ts` 5 个用例锁住"只允许 1/16/17""非法值回落默认"。
 - 待真机确认：1 和 16 分别对应哪种行为（相机枚举没给名字），确认后更新上表和 README。
 
+### 9.5 第二张假图来自「取景期轮询」而不是兜底（v0.1.9）
+
+0.1.7/0.1.8 只给"机身快门"和"清旧片"加了格式判断，App 自己按快门时仍会多存一张：
+
+```
+00:27:57.050 captured JPEG persisted bytes=24786176    ← 取景线程的 pollCapturedJpeg 取了 ARW
+00:27:57.518 object info handle=FFFFC001 format=0x3801 bytes=4876839 name=DSC00767.JPG
+00:27:57.755 captured JPEG persisted bytes=4876839     ← 事件通道拿到真正的 JPEG
+```
+
+原因：App 快门这条路上有**两个取图者** —— 取景线程里的 `pollCapturedJpeg()`（每 10 帧查一次
+`D215`）和 `awaitCapturedJpeg()`。前者在相机把新照片写进缓存之前先看到旧的 ARW（`D215` 还是
+`0x8001`），直接读走并落盘。格式判断只做在机身快门那条路上，所以没拦住。
+
+改法：把格式判断放进 `getObjectPayload()` 本身 —— 所有取图路径（App 快门、取景期轮询、
+机身快门、清旧片）都经过它，非 JPEG 一律返回 null，这一次事务就废掉，等新对象出现再取。
+
 
