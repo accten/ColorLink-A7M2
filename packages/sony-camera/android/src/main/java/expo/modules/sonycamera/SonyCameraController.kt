@@ -69,6 +69,12 @@ internal class SonyCameraController(private val context: Context) {
   private val streaming = AtomicBoolean(false)
   /** 最近一次统计到的取景帧率（每秒算一次，供界面显示） */
   @Volatile private var lastFps = 0.0
+
+  /** 取景中顺手读到的只读参数（快门/光圈/ISO/EV/WB/电量），随每秒的状态一起推给 JS */
+  @Volatile private var lastExposureSnapshot: Map<String, Any?> = emptyMap()
+  private var exposureMetricTick = 0
+  private var loggedStreamStatePublish = false
+
   @Volatile private var lastScalarDiscoveryFinishedAt = 0L
   private val permissionAction = context.packageName + PERMISSION_ACTION_SUFFIX
   private val diagnosticsPreferences = context.getSharedPreferences(DIAGNOSTICS_PREFERENCE, Context.MODE_PRIVATE)
@@ -430,7 +436,19 @@ internal class SonyCameraController(private val context: Context) {
               lastMetricFrameCount = frameCount
               lastMetricBytes = totalBytes
               lastFps = fps
-              // 每秒推一次状态就够了：界面顶部要显示真实帧率，但别把 JS 桥当计数器用
+              // 属性也在这条线程上顺手读：取景帧占满了传输锁，另开线程去抢只会饿死
+              // （真机就是 `read exposure failed: TimeoutException`）。每两秒读一次足够。
+              exposureMetricTick += 1
+              if (exposureMetricTick >= 2) {
+                exposureMetricTick = 0
+                runCatching { activeTransport?.readExposureSnapshot() }
+                  .getOrNull()
+                  ?.let { lastExposureSnapshot = it }
+              }
+              if (!loggedStreamStatePublish) {
+                loggedStreamStatePublish = true
+                trace("publishing stream state once a second: fps + exposure")
+              }
               listeners.forEach { it.onStateChanged(statePayload()) }
             }
           }
@@ -530,13 +548,16 @@ internal class SonyCameraController(private val context: Context) {
   /**
    * 监视器上那排只读参数。
    *
-   * 跑在独立线程上，最多等 6 秒；失败就返回空表，UI 继续显示占位符 —— 这条路径绝不能
-   * 把取景或快门带崩。
+   * 取景中直接返回帧线程顺手读到的快照：那时传输锁被取景帧占满，另开线程去抢只会超时。
+   * 非取景时走独立线程读一次，最多等 6 秒；失败就返回空表，UI 继续显示占位符 ——
+   * 这条路径绝不能把取景或快门带崩。
    */
   fun readExposureBlocking(): Map<String, Any?> {
     val active = transport ?: return emptyMap()
+    if (streaming.get()) return lastExposureSnapshot
     return try {
-      propertyExecutor.submit<Map<String, Any?>> { active.readExposureSnapshot() }.get(6, TimeUnit.SECONDS)
+      propertyExecutor.submit<Map<String, Any?>> { active.readExposureSnapshot().also { lastExposureSnapshot = it } }
+        .get(6, TimeUnit.SECONDS)
     } catch (error: Throwable) {
       val cause = error.cause ?: error
       trace("read exposure failed: ${cause.message ?: cause::class.java.simpleName}")
@@ -544,7 +565,8 @@ internal class SonyCameraController(private val context: Context) {
     }
   }
 
-  /** One capture attempt: shutter, wait for the transfer, persist the file. */  private fun runCaptureStep(): Map<String, Any?> {
+  /** One capture attempt: shutter, wait for the transfer, persist the file. */
+  private fun runCaptureStep(): Map<String, Any?> {
     val activeTransport = transport
     val activeScalar = scalarTransport
     if (activeTransport == null && activeScalar == null) throw SonyPtpException("Sony camera is not connected.")
@@ -782,6 +804,8 @@ internal class SonyCameraController(private val context: Context) {
     result["liveViewSupported"] = !liveViewUnsupported
     // 取景帧率：只在这一秒真的收到帧时才有意义，停流后归零，别让界面停在旧值
     result["fps"] = if (streaming.get()) lastFps else 0.0
+    // 只读参数（快门/光圈/ISO/EV/白平衡/电量）：取景中是帧线程顺手读到的，非取景时由轮询填
+    if (lastExposureSnapshot.isNotEmpty()) result["exposure"] = lastExposureSnapshot
     if (attached != null) {
       result["device"] = mapOf(
         "vendorId" to attached.vendorId,

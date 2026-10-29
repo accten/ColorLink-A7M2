@@ -1,5 +1,10 @@
 import { File } from 'expo-file-system';
-import SonyCamera, { type SonyCameraState, type SonyCameraStateName, type SonyPhoto } from 'expo-sony-camera';
+import SonyCamera, {
+  type SonyCameraState,
+  type SonyCameraStateName,
+  type SonyExposureSnapshot,
+  type SonyPhoto,
+} from 'expo-sony-camera';
 
 import { ingestFileName } from '@/core/asset';
 import { eventLog } from '@/core/log';
@@ -12,6 +17,9 @@ import { CameraError, CameraSnapshot, CapturedPhoto, ICameraTransport, IDLE_SNAP
 /** 握手超时：PTP2 开会话 + 读设备属性，慢的时候几秒；超过这个时间就认为连不上 */
 const CONNECT_TIMEOUT_MS = 15000;
 
+/** 同一张照片的双重通知（原生事件 + 调用返回值）在这个窗口内只入库一次 */
+const PHOTO_DEDUPE_WINDOW_MS = 15000;
+
 /**
  * 模块原生的状态负载。
  *
@@ -19,7 +27,11 @@ const CONNECT_TIMEOUT_MS = 15000;
  * PTP2 方言里没有 Sony 的取景属性，但我们补了「会话照常保留，只关掉取景」的处理，
  * 于是需要在 JS 侧知道"取景不可用但相机是连着的"。
  */
-type SonyStatePayload = SonyCameraState & { liveViewSupported?: boolean; fps?: number };
+type SonyStatePayload = SonyCameraState & {
+  liveViewSupported?: boolean;
+  fps?: number;
+  exposure?: SonyExposureSnapshot;
+};
 
 /**
  * 真机 USB 联机（PTP2），基于 expo-sony-camera 原生模块。
@@ -79,6 +91,9 @@ export class SonyCameraTransport implements ICameraTransport {
   private lastLoggedState?: string;
   private lastLoggedMessage?: string;
   private lastLoggedModel?: string;
+
+  /** 原生缓存 URI → 最近一次入库时间，用于把"同一次快门的两条通知"合并成一条 */
+  private readonly recentPhotoUris = new Map<string, number>();
 
   constructor() {
     const native = SonyCamera;
@@ -158,6 +173,20 @@ export class SonyCameraTransport implements ICameraTransport {
         : this.snap.caps,
       // 原生每秒推一次真实帧率（取景在原生层，JS 看不到帧本身）
       fps: typeof state.fps === 'number' ? Math.round(state.fps * 10) / 10 : this.snap.fps,
+      // 只读参数：取景时由原生的帧线程顺手读，非取景时由 refreshExposure() 轮询
+      exposure: state.exposure
+        ? {
+            shutter: state.exposure.shutterSpeed,
+            aperture: state.exposure.aperture,
+            iso: state.exposure.iso,
+            ev: state.exposure.exposureCompensation,
+            wb: state.exposure.whiteBalance,
+          }
+        : this.snap.exposure,
+      battery:
+        typeof state.exposure?.batteryPercent === 'number'
+          ? state.exposure.batteryPercent
+          : this.snap.battery,
       error: phase === 'error' ? describeError(state) : undefined,
     };
 
@@ -341,6 +370,16 @@ export class SonyCameraTransport implements ICameraTransport {
   /** 模块给的可能是 file:// 或 content://，统一读字节后写进 ingest/（保证后续导出可读）。 */
   private async handlePhoto(photo: SonyPhoto): Promise<CapturedPhoto | null> {
     if (!photo?.uri) return null;
+    // 同一张照片会走两条路到达这里：原生 `onPhotoCaptured` 事件，以及 capturePhoto() 的
+    // 返回值。两边都入库会写两份文件、图库出现重复（真机实测：一次快门出现 _001/_002）。
+    // 按原生缓存 URI 去重，窗口取 15 秒。
+    const now = Date.now();
+    const previous = this.recentPhotoUris.get(photo.uri);
+    if (previous != null && now - previous < PHOTO_DEDUPE_WINDOW_MS) return null;
+    this.recentPhotoUris.set(photo.uri, now);
+    for (const [uri, at] of this.recentPhotoUris) {
+      if (now - at > PHOTO_DEDUPE_WINDOW_MS) this.recentPhotoUris.delete(uri);
+    }
     const fileName = ingestFileName(new Date(), nextSeq(), 'jpg');
     const target = ingestFile(fileName);
 
