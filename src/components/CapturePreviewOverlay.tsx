@@ -4,6 +4,7 @@ import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-nativ
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { formatBytes, formatDimensions } from '@/core/asset';
+import { isPersistentPreview } from '@/core/capturePreview';
 import { color, radius, space, typography } from '@/design/tokens';
 import { useAppStore } from '@/state/useAppStore';
 
@@ -32,6 +33,8 @@ export function CapturePreviewOverlay() {
       easing: Easing.out(Easing.quad),
       useNativeDriver: true,
     }).start();
+    // 「一直」：不设倒计时，等到用户轻点再关（关闭仍然走同一条淡出路径）
+    if (isPersistentPreview(preview.seconds)) return;
     // 进度条只做"还剩多久"的暗示：不用 setTimeout 动画，跟着总时长线性走
     Animated.timing(progress, {
       toValue: 1,
@@ -61,31 +64,32 @@ export function CapturePreviewOverlay() {
         />
       </Pressable>
 
-      <View
-        pointerEvents="none"
-        style={[styles.caption, { paddingBottom: insets.bottom + space.lg }]}
-      >
+      <View pointerEvents="none" style={[styles.caption, { paddingBottom: insets.bottom + space.lg }]}>
         <Text style={styles.fileName} numberOfLines={1}>
           {preview.fileName}
         </Text>
         <Text style={styles.meta}>
           {preview.width > 0 ? `${formatDimensions(preview.width, preview.height)} · ` : ''}
           {formatBytes(preview.bytes)}
+          {isPersistentPreview(preview.seconds) ? ' · 轻点关闭' : ''}
         </Text>
       </View>
 
-      <View pointerEvents="none" style={[styles.progressTrack, { bottom: insets.bottom + space.sm }]}>
-        <Animated.View
-          style={[
-            styles.progressBar,
-            {
-              transform: [
-                { scaleX: progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }) },
-              ],
-            },
-          ]}
-        />
-      </View>
+      {/* 「一直」没有倒计时，就不画进度条 */}
+      {isPersistentPreview(preview.seconds) ? null : (
+        <View pointerEvents="none" style={[styles.progressTrack, { bottom: insets.bottom + space.sm }]}>
+          <Animated.View
+            style={[
+              styles.progressBar,
+              {
+                transform: [
+                  { scaleX: progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }) },
+                ],
+              },
+            ]}
+          />
+        </View>
+      )}
     </Animated.View>
   );
 }

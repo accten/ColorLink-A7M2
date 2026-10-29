@@ -234,7 +234,7 @@ export default function SettingsScreen() {
         <Label>相机</Label>
         <Card style={{ marginTop: space.sm }}>
           <T variant="body" style={{ marginBottom: space.sm }}>
-            照片保存位置
+            照片保存位置（部分机型有效）
           </T>
           <Segmented
             value={String(settings.captureTarget)}
@@ -246,6 +246,10 @@ export default function SettingsScreen() {
           />
           <T variant="monoMuted" style={{ marginTop: space.sm }}>
             {CAPTURE_TARGET_OPTIONS.find((o) => o.value === settings.captureTarget)?.hint ?? ''}
+          </T>
+          <T variant="monoMuted" style={{ marginTop: space.xs }}>
+            实测 ILCE-7M2 在 USB「PC 遥控」模式下三个值都不会写卡（固件行为，App 改不动）；
+            这一项留给支持「PC + 存储卡」的机型。
           </T>
           <Hairline />
           <Row

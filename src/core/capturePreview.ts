@@ -1,12 +1,20 @@
 /**
- * 拍完预览：照片回传后自动在大屏上展示几秒。
+ * 拍完预览：照片回传后自动在大屏上展示。
  *
  * 时长做成可选档位而不是任意数字：这是"给摄影师看一眼"的功能，2/3/5/10 秒已经覆盖
- * 「扫一眼构图」到「慢慢看细节」，0 表示关闭。数值存在 Settings 里，和导出选项一起持久化。
+ * 「扫一眼构图」到「慢慢看细节」，0 表示关闭。
+ * `PERSISTENT`（-1）是「一直」：不自动消失，必须点一下才关——拍完想一直盯着看时用。
  */
-export const PREVIEW_SECONDS_OPTIONS = [0, 2, 3, 5, 10] as const;
+export const PREVIEW_SECONDS_OPTIONS = [0, 2, 3, 5, 10, -1] as const;
 
 export const DEFAULT_PREVIEW_SECONDS = 3;
+
+/** 「一直显示」：不自动关闭，轻点才关 */
+export const PERSISTENT_PREVIEW = -1;
+
+export function isPersistentPreview(seconds: number): boolean {
+  return seconds === PERSISTENT_PREVIEW;
+}
 
 /** 把任意输入收敛到合法档位；非法值退回默认值。 */
 export function normalizePreviewSeconds(value: unknown): number {
@@ -19,6 +27,8 @@ export function normalizePreviewSeconds(value: unknown): number {
   let closest: number = DEFAULT_PREVIEW_SECONDS;
   let best = Number.POSITIVE_INFINITY;
   for (const option of PREVIEW_SECONDS_OPTIONS) {
+    // 「一直」不是时长，不参与"取最近"
+    if (option < 0) continue;
     const distance = Math.abs(option - num);
     if (distance < best) {
       best = distance;
@@ -29,5 +39,6 @@ export function normalizePreviewSeconds(value: unknown): number {
 }
 
 export function previewSecondsLabel(seconds: number): string {
+  if (isPersistentPreview(seconds)) return '一直';
   return seconds > 0 ? `${seconds} 秒` : '关闭';
 }

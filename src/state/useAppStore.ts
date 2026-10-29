@@ -149,9 +149,9 @@ export const useAppStore = create<AppState>((set, get) => {
     haptic('success');
     eventLog.info('ingest.ok', { fileName: asset.fileName, bytes: asset.bytes, mode });
 
-    // 拍完自动预览：0 秒表示用户关掉了，就直接进相册
+    // 拍完自动预览：0 表示用户关掉了，就直接进相册；负数（一直）也走这里
     const previewSeconds = state.settings.previewSeconds;
-    if (previewSeconds > 0) {
+    if (previewSeconds !== 0) {
       set({
         capturePreview: {
           id: ++previewSeq,
@@ -183,6 +183,7 @@ export const useAppStore = create<AppState>((set, get) => {
       });
     };
     if (previewSeconds > 0) setTimeout(thumbTask, previewSeconds * 1000 + 200);
+    else if (previewSeconds < 0) setTimeout(thumbTask, 3_000); // 「一直」：3 秒后照常补缩略图
     else thumbTask();
   };
 

@@ -35,6 +35,16 @@ export const CAPTURE_TARGET_OPTIONS: readonly CaptureTargetOption[] = [
   },
 ] as const;
 
+/**
+ * 实测结论（ILCE-7M2 + OPPO Pad 4 Pro，v0.1.8）：三个值都不写卡。
+ *
+ * 相机对每个写入都回 `0x2001`（接受），但照片仍然只进内存缓存交给主机，
+ * 说明"PC 遥控时不落卡"是这代机身固件的行为，不是这个属性控制的。
+ * 保留这一项是为了支持 "PC + 存储卡" 的机身，文案里已经写明"部分机型有效"。
+ */
+export const CAPTURE_TARGET_VERIFIED_NOTE =
+  '实测 ILCE-7M2 三个值都不写卡（PC 遥控模式下的固件行为）';
+
 export const DEFAULT_CAPTURE_TARGET = 17;
 
 export function normalizeCaptureTarget(value: unknown): number {
