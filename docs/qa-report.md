@@ -378,3 +378,16 @@ USB bulk-OUT failed op=0x9205 tx=20 result=-1 at=0/16              ← 之后连
 改法：非 JPEG 也读走，只是不落盘（`getObjectPayload` → `readObjectPayloadRaw` 读，丢弃，返回 null）。
 同样的道理，机身快门那条路遇到 ARW 也要 `fetchObject` 一次，不能只 return。
 代价是 RAW+JPEG 模式下每次开拍前要多读一张 24MB 的 ARW（约 1.2 秒）——把相机画质设成 JPEG 就没有这笔开销。
+
+### 9.8 「只有第一枪正常」：非 JPEG 要读走，还要继续读下一个对象（v0.2.2）
+
+0.2.1 补上了"读走非 JPEG"，但**机身快门那条路**是"发现非 JPEG → 读走 → 直接 return"。
+于是新照片的 `0xC201` 来了、句柄先给上一枪残留的 ARW、读完就结束，后面真正的 JPEG 没人取。
+表现就是用户报的：**第一枪正常，之后每枪都没有预览**。
+
+改法：把"读一次"改成**循环最多 5 次**——非 JPEG 读走（句柄才前进）后 `continue`，
+直到拿到完整 JPEG 或次数用完；只有全程都是非 JPEG 时才提示 RAW。
+（App 快门那条路由 `awaitCapturedJpeg` 每 500ms 轮询，本身就会跨过残留，不用改。）
+
+另外确认：预览浮层用 `key=preview.id` 重挂，所以**预览没关的时候新拍的照片会直接顶掉当前这张**，
+不需要先关闭预览。

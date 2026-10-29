@@ -55,6 +55,14 @@ internal class SonyCameraController(private val context: Context) {
     /** 兜底取图后的冷却：别在相机还没清理干净时连取两次同一张 */
     private const val BODY_SHUTTER_FETCH_COOLDOWN_MS = 3_000L
 
+    /**
+     * 机身快门一次最多读几个对象。
+     *
+     * RAW+JPEG 时句柄上会先摆上一枪残留的 ARW（读走它句柄才前进），再给新拍的 JPEG；
+     * 所以"读一次拿不到 JPEG 就放弃"会漏照片。5 次足够跨过残留，又不会在真卡住时空转太久。
+     */
+    private const val BODY_SHUTTER_MAX_READS = 5
+
     private const val SCALAR_RECONNECT_DELAY_MS = 750L
     private const val SCALAR_DISCOVERY_COOLDOWN_MS = 2_000L
     private val CONNECT_OPTION_KEYS = setOf("candidateId", "preferredProtocol", "preferredTransport")
@@ -862,31 +870,28 @@ internal class SonyCameraController(private val context: Context) {
     lastBodyFetchAt = SystemClock.elapsedRealtime()
     if (wasStreaming) stopLiveView(preserveRequest = true)
     try {
-      // 落盘前先看格式：RAW+JPEG 时机身把 JPEG 和 ARW 放在同一个句柄上，
-      // 读走 JPEG 之后再问就变成 ARW 了。不判断格式就会把 24MB 的 ARW 存成 .jpg。
-      val info = runCatching { active.objectInfo(handle) }.getOrNull()
-      if (info != null && !SonyPtpCodec.isJpegObjectFormat(info.format)) {
-        trace(
-          "body shutter: object format=0x%04X (%s) is not JPEG; discarding".format(info.format, info.name),
-        )
-        // 读走并丢弃：不读的话句柄不会前进，下一枪就永远取不到（真机踩到过）。
-        runCatching { active.fetchObject(handle) }
-        updateState(
-          "ready",
-          if (SonyPtpCodec.isSonyRawObjectFormat(info.format)) {
-            "相机这一张回传的是 RAW(ARW)，已跳过；把画质改成 JPEG 就能直接调色。"
-          } else {
-            "相机回传的对象不是 JPEG（format=0x%04X），已跳过。".format(info.format)
-          },
-        )
-        return
-      }
-      // 相机还在写卡：给它一点时间再读，读不到或读回半截就退避重试。
-      // 第一次只等 120ms：大多数情况下相机此时已经写完（实测事件到读完约 150ms）；
-      // 半截字节用 EOI 判断（相机此时可能只写了一半），不完整就继续等。
+      // RAW+JPEG 时机身把 JPEG 和 ARW 摆在同一个句柄上，而且上一枪读完 JPEG 会留一张 ARW
+      // 挂在句柄上。所以不能"看到非 JPEG 就结束"——那正是"第一张正常、之后每枪都没反应"的
+      // 原因：新照片的 0xC201 来了，但句柄先给的是旧 ARW，丢掉它就 return，后面的 JPEG 没取。
+      // 正确做法：非 JPEG 读走（句柄才会前进），然后继续读下一个对象，直到拿到 JPEG 或次数用完。
       var jpeg: ByteArray? = null
-      for (attempt in 0 until 3) {
-        SystemClock.sleep(if (attempt == 0) 120L else if (attempt == 1) 300L else 700L)
+      var sawNonJpeg = false
+      var lastNonJpegFormat = 0
+      for (attempt in 0 until BODY_SHUTTER_MAX_READS) {
+        SystemClock.sleep(if (attempt == 0) 120L else if (attempt == 1) 300L else 600L)
+        val info = runCatching { active.objectInfo(handle) }.getOrNull()
+        if (info != null && !SonyPtpCodec.isJpegObjectFormat(info.format)) {
+          sawNonJpeg = true
+          lastNonJpegFormat = info.format
+          trace(
+            "body shutter: discarding non-JPEG format=0x%04X (%s), reading the next object".format(
+              info.format,
+              info.name,
+            ),
+          )
+          runCatching { active.fetchObject(handle) }
+          continue
+        }
         val candidate = runCatching { active.fetchObject(handle) }.getOrNull() ?: continue
         // 尾部窗口放宽到 4KB：机身偶尔会在文件后面补一点东西，只有半截的才不要。
         if (SonyPtpCodec.isCompleteJpeg(candidate, tailWindow = 4096)) {
@@ -899,6 +904,16 @@ internal class SonyCameraController(private val context: Context) {
         runCatching { persistCapturedJpeg(jpeg) }
           .onSuccess { updateState("ready", "已取回相机上拍的那一张。") }
           .onFailure { updateState("ready", "照片已取回，但无法预览：${it.message ?: "unknown"}") }
+      } else if (sawNonJpeg) {
+        trace("body shutter: only non-JPEG objects (last format=0x%04X)".format(lastNonJpegFormat))
+        updateState(
+          "ready",
+          if (SonyPtpCodec.isSonyRawObjectFormat(lastNonJpegFormat)) {
+            "相机这一张回传的是 RAW(ARW)，已跳过；把画质改成 JPEG 就能直接调色。"
+          } else {
+            "相机回传的对象不是 JPEG（format=0x%04X），已跳过。".format(lastNonJpegFormat)
+          },
+        )
       } else {
         trace("body shutter: object ${"%08X".format(handle)} could not be fetched")
         updateState("ready", "相机拍了照片，但没能通过 USB 取回（照片在相机存储卡里）。")
