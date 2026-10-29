@@ -316,6 +316,8 @@ internal class SonyCameraController(private val context: Context) {
       transport = next
       // 读中断端点：相机拍完会推 ObjectAdded(0xC201)，参数里带新对象句柄
       next.startEventLoop()
+      // 机身自己按快门也要把照片收回来：事件线程只负责标记，取图放在这条监听线程里
+      startBodyShutterWatcher()
       updateState("ready", "Sony camera is ready.")
       return statePayload()
     } catch (error: Throwable) {
@@ -689,6 +691,7 @@ internal class SonyCameraController(private val context: Context) {
   }
 
   fun disconnectBlocking(preserveLiveViewRequest: Boolean = false): Map<String, Any?> {
+    stopBodyShutterWatcher()
     stopLiveView(preserveRequest = preserveLiveViewRequest)
     lastFrameJpeg = null
     val old = transport
@@ -703,8 +706,83 @@ internal class SonyCameraController(private val context: Context) {
     return updateState("disconnected", "Sony camera disconnected.")
   }
 
-  private fun persistCapturedJpeg(jpeg: ByteArray, notify: Boolean = true): Map<String, Any?> {
-    val signature = jpeg.take(4).joinToString("") { "%02X".format(it) }
+  // ---- 机身快门监听：相机上按快门也要把照片收回来 ----
+
+  @Volatile private var bodyShutterWatcherRunning = false
+  private var bodyShutterWatcher: Thread? = null
+
+  /**
+   * 轮询中断事件里记下的 `ObjectAdded` 句柄，把相机自己拍的那张取回来。
+   *
+   * 相机自己按快门 → 机身在中断端点推 `0xC201 0xFFFFC001`（前提是它把照片放进了内存缓存，
+   * 也就是「PC 遥控」模式下默认会做的事）。这条线程只做一件事：看到标记就
+   * `0x1008 → 0x1009` 把对象取回来，落盘并通知上层。
+   *
+   * 取图期间如果正在取景，会先停流再恢复：整读大对象和取景帧共用同一个 bulk 端点，
+   * 抢在一起容易把相机卡住（真机踩过）。
+   */
+  private fun startBodyShutterWatcher() {
+    if (bodyShutterWatcherRunning) return
+    bodyShutterWatcherRunning = true
+    bodyShutterWatcher = Thread({
+      trace("body-shutter watcher started")
+      while (bodyShutterWatcherRunning) {
+        val active = transport
+        if (active == null) {
+          SystemClock.sleep(300)
+          continue
+        }
+        val handle = runCatching { active.takePendingExternalCapture() }.getOrNull()
+        if (handle == null) {
+          SystemClock.sleep(200)
+          continue
+        }
+        // App 自己按的快门有自己的路径，别两条路抢同一张
+        if (state == "capturing") {
+          active.clearPendingExternalCapture()
+          SystemClock.sleep(200)
+          continue
+        }
+        handleBodyShutterCapture(active, handle)
+      }
+      trace("body-shutter watcher stopped")
+    }, "SonyBodyShutter").apply { isDaemon = true }
+    bodyShutterWatcher?.start()
+  }
+
+  private fun stopBodyShutterWatcher() {
+    bodyShutterWatcherRunning = false
+    bodyShutterWatcher?.interrupt()
+    bodyShutterWatcher = null
+  }
+
+  private fun handleBodyShutterCapture(active: SonyPtpTransport, handle: Int) {
+    val wasStreaming = streaming.get()
+    trace("body shutter: object ${"%08X".format(handle)} announced; fetching")
+    trace("body shutter: fetching announced object")
+    if (wasStreaming) stopLiveView(preserveRequest = true)
+    try {
+      // 相机还在写卡：给它一点时间再读，读不到就再试，最多两轮
+      var jpeg: ByteArray? = null
+      for (attempt in 0 until 2) {
+        SystemClock.sleep(if (attempt == 0) 400 else 700)
+        jpeg = runCatching { active.fetchObject(handle) }.getOrNull()
+        if (jpeg != null) break
+      }
+      if (jpeg != null) {
+        runCatching { persistCapturedJpeg(jpeg) }
+          .onSuccess { updateState("ready", "已取回相机上拍的那一张。") }
+          .onFailure { updateState("ready", "照片已取回，但无法预览：${it.message ?: "unknown"}") }
+      } else {
+        trace("body shutter: object ${"%08X".format(handle)} could not be fetched")
+        updateState("ready", "相机拍了照片，但没能通过 USB 取回（照片在相机存储卡里）。")
+      }
+    } finally {
+      if (wasStreaming) startLiveView()
+    }
+  }
+
+  private fun persistCapturedJpeg(jpeg: ByteArray, notify: Boolean = true): Map<String, Any?> {    val signature = jpeg.take(4).joinToString("") { "%02X".format(it) }
     val bitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
       ?: run {
         // Sony 的 RAW(ARW) 是 TIFF 容器，BitmapFactory 解不了。说清楚是什么，
@@ -768,6 +846,7 @@ internal class SonyCameraController(private val context: Context) {
     trace("failure ${error::class.java.simpleName}: ${error.message ?: "no message"}")
     val lostScalarConnection = scalarTransport != null && isConnectionLoss(error)
     streaming.set(false)
+    stopBodyShutterWatcher()
     runCatching { transport?.close() }
     transport = null
     val hadScalar = scalarTransport != null

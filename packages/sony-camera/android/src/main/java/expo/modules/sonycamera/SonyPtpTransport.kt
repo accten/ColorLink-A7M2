@@ -265,6 +265,11 @@ internal class SonyPtpTransport private constructor(
         lastEventCode = code
         lastEventParams = params
         trace("PTP event code=${code.hex()} params=${params.joinToString { it.hex32() }}")
+        if (code == 0xC201 && params.isNotEmpty()) {
+          // 相机自己按了快门：Body 会把新对象（0xFFFFC001）通过 ObjectAdded 告诉我们。
+          // 记下来，交给监听线程去取图 —— 这条路径以前只是记日志，没人接手。
+          pendingExternalHandle = params[0]
+        }
         for (listener in eventListeners) {
           runCatching { listener(code, params) }
         }
@@ -281,6 +286,29 @@ internal class SonyPtpTransport private constructor(
     eventThread?.interrupt()
     eventThread = null
   }
+
+  /**
+   * 相机自己按快门时，`ObjectAdded(0xC201)` 里的对象句柄。
+   *
+   * 事件线程写、监听线程读：取走即清空，保证一张照片只取一次。
+   */
+  @Volatile private var pendingExternalHandle = 0
+
+  /** 取走"机身自己拍的那一张"的句柄；没有就返回 null。 */
+  fun takePendingExternalCapture(): Int? {
+    val handle = pendingExternalHandle
+    if (handle == 0) return null
+    pendingExternalHandle = 0
+    return handle
+  }
+
+  /** 丢弃待取的机身快门句柄（例如 App 自己的快门路径已经处理过这一张）。 */
+  fun clearPendingExternalCapture() {
+    pendingExternalHandle = 0
+  }
+
+  /** 按句柄取回一整个对象（机身快门用）：先 `0x1008`，再 `0x1009`，失败退分块读。 */
+  fun fetchObject(handle: Int): ByteArray? = getObjectPayload(handle)
 
   /** Populated during [authenticate]; null when the camera refused `GetDeviceInfo`. */
   var deviceInfo: SonyDeviceInfo? = null
