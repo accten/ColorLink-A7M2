@@ -327,6 +327,9 @@ internal class SonyPtpTransport private constructor(
   /** `D215 ObjectInMemory`：>= 0x8000 表示相机内存里已经有一张拍好的照片。 */
   fun objectInMemory(): Long? = readPropertyValue(PROPERTY_OBJECT_IN_MEMORY)
 
+  /** `0x1008`：对象的格式/大小/文件名。落盘前判断是不是 JPEG 就靠它。 */
+  fun objectInfo(handle: Int): SonyObjectInfo? = readObjectInfo(handle)
+
   /** Populated during [authenticate]; null when the camera refused `GetDeviceInfo`. */
   var deviceInfo: SonyDeviceInfo? = null
     private set
@@ -789,8 +792,15 @@ internal class SonyPtpTransport private constructor(
       .onFailure { noteCaptureReadFailure("pre-capture D215", it) }
       .getOrNull()
     if (stale != null && stale >= 0x8000) {
-      trace("clearing stale in-memory object D215=0x%04X".format(stale))
-      runCatching { getObjectPayload(HANDLE_CAPTURED_IMAGE) }
+      // RAW+JPEG 时机身会在同一个句柄上先放 JPEG、读完再放 ARW。这时候内存里的"旧片"
+      // 往往已经是 ARW 了 —— 为了清掉它去整读 24MB 纯属浪费（实测 1.2 秒），先看格式。
+      val info = runCatching { readObjectInfo(HANDLE_CAPTURED_IMAGE) }.getOrNull()
+      if (info != null && !SonyPtpCodec.isJpegObjectFormat(info.format)) {
+        trace("skip draining stale object format=0x%04X (%s); not a JPEG".format(info.format, info.name))
+      } else {
+        trace("clearing stale in-memory object D215=0x%04X".format(stale))
+        runCatching { getObjectPayload(HANDLE_CAPTURED_IMAGE) }
+      }
     }
 
     // Sony 的控制序列（libgphoto2 在 ILCE 上实测）：半按 → 全按 → 停住等对焦 → 松开全按 → 松开半按。

@@ -273,4 +273,31 @@ USB bulk-OUT failed op=0x9205 tx=20 result=-1 at=0/16              ← 之后连
 这条兜底也拿不到，需要走卡侧枚举（`0x923B/0x923D` 或标准 `0x1007/0x1009`）。
 该分支是否必要，取决于用户下次按机身快门时 D215 是否变化。
 
+### 9.3 一次机身快门出现两张 jpg：RAW+JPEG 时同一个句柄会先后给两个对象（v0.1.7）
+
+真机（0.1.6，机身画质设为 RAW+JPEG）按一次快门，图库里出现两张：
+
+```
+23:18:38.963 body shutter: object FFFFC001 announced; fetching
+23:18:40.093 object info handle=FFFFC001 format=0x3801 bytes=4176676   name=DSC00001.JPG
+23:18:40.286 captured JPEG persisted bytes=4176676                     ← 正确的那张
+23:18:41.112 body shutter fallback: D215=0x8001 but no ObjectAdded; fetching
+23:18:41.306 object info handle=FFFFC001 format=0xB101 bytes=24734976  name=DSC00001.ARW
+23:18:44.110 captured JPEG persisted bytes=24734976                    ← ARW 被存成 .jpg
+```
+
+两个原因，都是我们的：
+
+1. **`D215` 不会因为读走而清掉**：照片取回后它仍是 `0x8001`。兜底通道按"有货就取"判断，
+   于是事件通道刚取完 JPEG，1 秒后又取了第二次。改成**边沿触发**——只有 `D215` 从 <0x8000
+   跨到 >=0x8000 时才取；并且任何一次机身取图后都刷新冷却时间。
+2. **RAW+JPEG 时同一个句柄上先放 JPEG、读走再放 ARW**（`format=0x3801` → `0xB101`）。
+   ARW 里有嵌入的 JPEG 预览，所以它也能被 `BitmapFactory` 读出尺寸（实测 1616×1080），
+   于是一路存成 `.jpg`。现在落盘前一定先看 `0x1008` 的 `format`：不是 JPEG 就跳过并给出
+   "相机这一张回传的是 RAW(ARW)" 的提示。
+   `captureStill()` 里"清掉内存旧片"的那一步同样先看格式——旧片是 ARW 时不再白读 24MB（省 1.2 秒）。
+
+顺带：完整性判断的尾部窗口从 64B 放宽到 4KB（容忍机身补字节），并去掉"不完整也留着落盘"的兜底，
+半截 JPEG 不再进图库。
+
 

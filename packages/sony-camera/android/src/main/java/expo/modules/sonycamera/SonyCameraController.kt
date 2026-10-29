@@ -803,20 +803,27 @@ internal class SonyCameraController(private val context: Context) {
   /** 上次兜底取图的时间：同一张不要被连取两次 */
   private var lastBodyFetchAt = 0L
 
+  /** 上一次看到的 D215：兜底只在"从没货变成有货"的边沿触发，见 fetchInMemoryShotIfAny */
+  private var lastSeenD215 = 0L
+
   /**
    * 机身快门的兜底通道：`0xC201` 丢了也能把照片取回来。
    *
-   * 只在"没在按 App 快门、也没有待取句柄"时调用（监听线程串行执行），并带冷却。
-   * 判据是 `D215 >= 0x8000`（相机内存里已经有一张拍好的照片），此时按机身快门那张处理。
+   * **必须是边沿触发**：`D215` 在照片被读走之后仍然是 `0x8001`（机身不会清），
+   * 如果按"有货就去取"来做，事件通道刚取完一张，这里立刻又取一次 ——
+   * 而且 RAW+JPEG 时机身第二次会交 ARW，于是图库里凭空多出一张 24MB 的 .jpg。
+   * 所以只在 `D215` 从 <0x8000 跨到 >=0x8000 的那一下触发。
    */
   private fun fetchInMemoryShotIfAny(active: SonyPtpTransport) {
     if (state == "capturing") return
+    val inMemory = active.objectInMemory() ?: return
+    val previous = lastSeenD215
+    lastSeenD215 = inMemory
+    if (inMemory < 0x8000) return
+    if (previous >= 0x8000) return
     val now = SystemClock.elapsedRealtime()
     if (now - lastBodyFetchAt < BODY_SHUTTER_FETCH_COOLDOWN_MS) return
-    val inMemory = active.objectInMemory() ?: return
-    if (inMemory < 0x8000) return
-    trace("body shutter fallback: D215=0x%04X but no ObjectAdded; fetching".format(inMemory))
-    lastBodyFetchAt = now
+    trace("body shutter fallback: D215 0x%04X -> 0x%04X without ObjectAdded; fetching".format(previous, inMemory))
     handleBodyShutterCapture(active, active.capturedImageHandle)
   }
 
@@ -830,9 +837,26 @@ internal class SonyCameraController(private val context: Context) {
   private fun handleBodyShutterCapture(active: SonyPtpTransport, handle: Int) {
     val wasStreaming = streaming.get()
     trace("body shutter: object ${"%08X".format(handle)} announced; fetching")
-    trace("body shutter: fetching announced object")
+    lastBodyFetchAt = SystemClock.elapsedRealtime()
     if (wasStreaming) stopLiveView(preserveRequest = true)
     try {
+      // 落盘前先看格式：RAW+JPEG 时机身把 JPEG 和 ARW 放在同一个句柄上，
+      // 读走 JPEG 之后再问就变成 ARW 了。不判断格式就会把 24MB 的 ARW 存成 .jpg。
+      val info = runCatching { active.objectInfo(handle) }.getOrNull()
+      if (info != null && !SonyPtpCodec.isJpegObjectFormat(info.format)) {
+        trace(
+          "body shutter: object format=0x%04X (%s) is not JPEG; skipping".format(info.format, info.name),
+        )
+        updateState(
+          "ready",
+          if (SonyPtpCodec.isSonyRawObjectFormat(info.format)) {
+            "相机这一张回传的是 RAW(ARW)，已跳过；把画质改成 JPEG 就能直接调色。"
+          } else {
+            "相机回传的对象不是 JPEG（format=0x%04X），已跳过。".format(info.format)
+          },
+        )
+        return
+      }
       // 相机还在写卡：给它一点时间再读，读不到或读回半截就退避重试。
       // 第一次只等 120ms：大多数情况下相机此时已经写完（实测事件到读完约 150ms）；
       // 半截字节用 EOI 判断（相机此时可能只写了一半），不完整就继续等。
@@ -840,13 +864,12 @@ internal class SonyCameraController(private val context: Context) {
       for (attempt in 0 until 3) {
         SystemClock.sleep(if (attempt == 0) 120L else if (attempt == 1) 300L else 700L)
         val candidate = runCatching { active.fetchObject(handle) }.getOrNull() ?: continue
-        if (SonyPtpCodec.isCompleteJpeg(candidate)) {
+        // 尾部窗口放宽到 4KB：机身偶尔会在文件后面补一点东西，只有半截的才不要。
+        if (SonyPtpCodec.isCompleteJpeg(candidate, tailWindow = 4096)) {
           jpeg = candidate
           break
         }
         trace("body shutter: incomplete jpeg ${candidate.size} bytes, retrying")
-        // 留着当兜底：万一机身对文件做了填充，尾部的 EOI 不在窗口里
-        if (jpeg == null) jpeg = candidate
       }
       if (jpeg != null) {
         runCatching { persistCapturedJpeg(jpeg) }

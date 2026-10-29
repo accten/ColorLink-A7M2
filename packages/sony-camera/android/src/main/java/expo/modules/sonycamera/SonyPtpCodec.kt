@@ -57,6 +57,22 @@ internal object SonyPtpCodec {
   }
 
   /**
+   * PTP 对象格式是不是 JPEG。
+   *
+   * 机身设成 RAW+JPEG 时，`0xFFFFC001` 这个句柄会**先后交出两个对象**：
+   * 先 `format=0x3801` 的 `DSC00256.JPG`，读完再问就变成 `format=0xB101` 的 `DSC00256.ARW`
+   * （实测 OPPO Pad 4 Pro + ILCE-7M2）。所以"再读一次"拿到的不一定是同一张照片，
+   * 落盘前必须先看格式，否则会把 24MB 的 ARW 存成 .jpg。
+   */
+  fun isJpegObjectFormat(format: Int): Boolean = format == OBJECT_FORMAT_JPEG
+
+  /** Sony 的 ARW 对象格式码（诊断用；我们不处理 RAW）。 */
+  fun isSonyRawObjectFormat(format: Int): Boolean = format == OBJECT_FORMAT_SONY_RAW
+
+  private const val OBJECT_FORMAT_JPEG = 0x3801
+  private const val OBJECT_FORMAT_SONY_RAW = 0xB101
+
+  /**
    * JPEG 是否"已经写完"：SOI 开头，且末尾一段窗口里有 EOI（`FF D9`）。
    *
    * 用途：机身快门那条路是先收到 `0xC201` 事件再去读对象，相机此时可能还在往卡里写，

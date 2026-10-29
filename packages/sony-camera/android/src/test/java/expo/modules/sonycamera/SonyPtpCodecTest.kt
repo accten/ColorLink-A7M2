@@ -58,6 +58,16 @@ class SonyPtpCodecTest {
     assertFalse(SonyPtpCodec.isCompleteJpeg(ByteArray(0)))
     assertFalse(SonyPtpCodec.isCompleteJpeg(byteArrayOf(0xFF.toByte(), 0xD9.toByte())))
   }
+
+  @Test
+  fun classifiesObjectFormats() {
+    // 实机：RAW+JPEG 时同一个句柄先给 0x3801(JPEG)、再给 0xB101(ARW)
+    assertTrue(SonyPtpCodec.isJpegObjectFormat(0x3801))
+    assertTrue(SonyPtpCodec.isSonyRawObjectFormat(0xB101))
+    assertFalse(SonyPtpCodec.isJpegObjectFormat(0xB101))
+    assertFalse(SonyPtpCodec.isSonyRawObjectFormat(0x3801))
+    assertFalse(SonyPtpCodec.isJpegObjectFormat(0x4000))
+  }
 }
 
 class SonyPtpPropertiesTest {
