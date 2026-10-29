@@ -167,17 +167,23 @@ export const useAppStore = create<AppState>((set, get) => {
       eventLog.info('preview.shown', { fileName: asset.fileName, seconds: previewSeconds });
     }
 
-    // 缩略图在后台补：不阻塞入库，也不影响快门手感
-    void ensureThumbnail(asset).then((thumbUri) => {
-      if (!thumbUri) return;
-      const current = get().assets;
-      if (!current.some((item) => item.id === asset.id)) return;
-      const withThumb = current.map((item) =>
-        item.id === asset.id ? { ...item, thumbUri } : item,
-      );
-      set({ assets: withThumb });
-      persist(withThumb);
-    });
+    // 缩略图在后台补：不阻塞入库，也不影响快门手感。
+    // 预览开着的时候先等它放完 —— 缩略图要 Skia 整张解一次 24MP，
+    // 和预览那张图抢解码只会让预览更晚出来。
+    const thumbTask = () => {
+      void ensureThumbnail(asset).then((thumbUri) => {
+        if (!thumbUri) return;
+        const current = get().assets;
+        if (!current.some((item) => item.id === asset.id)) return;
+        const withThumb = current.map((item) =>
+          item.id === asset.id ? { ...item, thumbUri } : item,
+        );
+        set({ assets: withThumb });
+        persist(withThumb);
+      });
+    };
+    if (previewSeconds > 0) setTimeout(thumbTask, previewSeconds * 1000 + 200);
+    else thumbTask();
   };
 
   const attach = async (mode: CameraMode) => {
