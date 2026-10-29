@@ -190,6 +190,10 @@ internal class SonyPtpTransport private constructor(
   /** 一次拍摄里只记一次命令失败，否则 100 次轮询会写 100 行日志 */
   private var loggedCaptureReadFailure = false
 
+  /** 上一次拍摄始终没有合焦：机身很可能根本没开火，超时提示要按这个说 */
+  @Volatile var captureFocusMissed = false
+    private set
+
   /** 属性轮询的熔断：连续失败到上限就彻底停掉（重连后恢复） */
   private var exposurePollFailures = 0
 
@@ -727,6 +731,7 @@ internal class SonyPtpTransport private constructor(
     loggedSettleWait = false
     loggedObjectInMemory = Long.MIN_VALUE
     loggedCaptureReadFailure = false
+    captureFocusMissed = false
     captureStartedAt = SystemClock.elapsedRealtime()
 
     // 停取景会打断一帧的传输，那条事务的数据/响应还压在端点里。不清理就直接发命令，
@@ -753,17 +758,28 @@ internal class SonyPtpTransport private constructor(
       .onFailure { noteCaptureReadFailure("full-press", it) }
 
     val focusDeadline = SystemClock.elapsedRealtime() + CAPTURE_PRESS_HOLD_MS
+    var focusAchieved = false
     while (SystemClock.elapsedRealtime() < focusDeadline) {
-      if (lastEventCode == 0xC201) break
+      if (lastEventCode == 0xC201) {
+        focusAchieved = true
+        break
+      }
       val focus = runCatching { readPropertyValue(PROPERTY_FOCUS_FOUND) }
         .onFailure { noteCaptureReadFailure("D213", it) }
         .getOrNull()
       if (focus != null && focus >= 2L) {
         trace("focus found D213=0x%04X".format(focus))
+        focusAchieved = true
         break
       }
       // 0x9209 是整份属性数组（1KB+），别按 50ms 的节奏灌给相机
       SystemClock.sleep(150)
+    }
+    if (!focusAchieved) {
+      // 真机上这不是"没拍到"，而是**根本没开火**：A7M2 在 AF-S 下合不了焦就不放快门，
+      // 之后 D215 一直是 0。记下来，超时时给出准确的提示，而不是笼统的"没有回传"。
+      captureFocusMissed = true
+      trace("no focus lock within ${CAPTURE_PRESS_HOLD_MS}ms; the body probably will not fire")
     }
 
     runCatching { setButton(PROPERTY_CAPTURE_BUTTON, 1) }
@@ -809,6 +825,12 @@ internal class SonyPtpTransport private constructor(
       }
       // 别打得太密：相机在写卡，一条命令接一条会把它逼到不回包。
       SystemClock.sleep(CAPTURE_POLL_INTERVAL_MS)
+    }
+    if (captureFocusMissed) {
+      throw SonyPtpException(
+        "CAPTURE_NO_FOCUS the camera never reported focus, so it did not fire. Switch the " +
+          "camera to manual focus or point it at a subject with contrast and try again.",
+      )
     }
     throw SonyPtpException(
       "The shutter fired, but no image came back over PTP. The camera (ILCE-7M2) only hands " +

@@ -356,6 +356,18 @@ export class SonyCameraTransport implements ICameraTransport {
         };
       }
 
+      // 相机没合焦 → 根本没开火（不是回传失败）。A7M2 在 AF-S 下合不了焦就不放快门。
+      if (message.includes('CAPTURE_NO_FOCUS')) {
+        return {
+          ok: false,
+          error: {
+            code: 'E_CAPTURE_TIMEOUT',
+            message: '相机没有合焦，快门没触发',
+            hints: ['把相机对焦模式改成 MF（手动对焦）后重试', '或让相机对准有明暗对比的物体，再点一次快门'],
+          },
+        };
+      }
+
       return {
         ok: false,
         error: {
