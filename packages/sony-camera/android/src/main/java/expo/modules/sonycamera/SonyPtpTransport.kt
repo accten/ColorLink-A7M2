@@ -632,11 +632,19 @@ internal class SonyPtpTransport private constructor(
       // BitmapFactory 也能读出尺寸，一旦落盘就是一张 24MB 的假 .jpg（真机踩到两次）。
       // 这里统一拦掉：所有取图路径（App 快门、机身快门、取景期的轮询）都走这个函数。
       if (!SonyPtpCodec.isJpegObjectFormat(info.format)) {
-        trace("skip non-JPEG object format=0x%04X (%s)".format(info.format, info.name))
+        // 关键：**必须把它读走**。句柄不会自己前进——不读，相机就一直把这张 ARW 摆在
+        // 0xFFFFC001 上，下一枪永远等不到新照片（真机现象：第一张正常，之后每枪卡住到超时，
+        // 日志里每秒一条 skip）。读走但不返回，等于"消费并丢弃"。
+        trace("discarding non-JPEG object format=0x%04X (%s)".format(info.format, info.name))
+        runCatching { readObjectPayloadRaw(handle) }
         return null
       }
     }
+    return readObjectPayloadRaw(handle)
+  }
 
+  /** 真正发 `0x1009` / `0x101B` 读对象字节，不做任何格式判断。 */
+  private fun readObjectPayloadRaw(handle: Int): ByteArray? {
     val result = execute(
       0x1009,
       intArrayOf(handle),
@@ -806,15 +814,11 @@ internal class SonyPtpTransport private constructor(
       .onFailure { noteCaptureReadFailure("pre-capture D215", it) }
       .getOrNull()
     if (stale != null && stale >= 0x8000) {
-      // RAW+JPEG 时机身会在同一个句柄上先放 JPEG、读完再放 ARW。这时候内存里的"旧片"
-      // 往往已经是 ARW 了 —— 为了清掉它去整读 24MB 纯属浪费（实测 1.2 秒），先看格式。
-      val info = runCatching { readObjectInfo(HANDLE_CAPTURED_IMAGE) }.getOrNull()
-      if (info != null && !SonyPtpCodec.isJpegObjectFormat(info.format)) {
-        trace("skip draining stale object format=0x%04X (%s); not a JPEG".format(info.format, info.name))
-      } else {
-        trace("clearing stale in-memory object D215=0x%04X".format(stale))
-        runCatching { getObjectPayload(HANDLE_CAPTURED_IMAGE) }
-      }
+      // 清掉内存里遗留的旧片，否则这一枪读回来的是上一张。
+      // 注意必须真读：句柄不读就不会前进（RAW+JPEG 时留下的 ARW 也会在这被读走丢弃，
+      // getObjectPayload 内部判断格式，非 JPEG 只丢弃不返回）。
+      trace("clearing stale in-memory object D215=0x%04X".format(stale))
+      runCatching { getObjectPayload(HANDLE_CAPTURED_IMAGE) }
     }
 
     // Sony 的控制序列（libgphoto2 在 ILCE 上实测）：半按 → 全按 → 停住等对焦 → 松开全按 → 松开半按。

@@ -2,6 +2,7 @@ import * as Haptics from 'expo-haptics';
 import { create } from 'zustand';
 
 import { Asset, isDuplicateCapture } from '@/core/asset';
+import { findProvider } from '@/core/aiProvider';
 import { CurveSet, cloneCurveSet } from '@/core/curve';
 import { EditParams, ParamKey, DEFAULT_PARAMS, withParam } from '@/core/params';
 import { BUILTIN_PRESETS, Preset } from '@/core/presets';
@@ -46,13 +47,17 @@ export interface Notice {
  */
 export interface CapturePreview {
   id: number;
+  /** 图库里的资产 id：预览上的「编辑」要跳进对应编辑器 */
+  assetId: string;
   uri: string;
   thumbUri?: string;
   fileName: string;
   bytes: number;
   width: number;
   height: number;
-  /** 展示时长（秒）；由设置决定，预览过程中不再变 */
+  /** 入库时间（预览的「详情」要显示拍摄时间） */
+  capturedAt: number;
+  /** 展示时长（秒）：>0 到点自动关，0 不看，-1 一直显示；由设置决定 */
   seconds: number;
 }
 
@@ -183,12 +188,14 @@ export const useAppStore = create<AppState>((set, get) => {
       set({
         capturePreview: {
           id: ++previewSeq,
+          assetId: asset.id,
           uri: asset.uri,
           thumbUri: asset.thumbUri,
           fileName: asset.fileName,
           bytes: asset.bytes,
           width: asset.width,
           height: asset.height,
+          capturedAt: asset.capturedAt,
           seconds: previewSeconds,
         },
       });
@@ -289,7 +296,9 @@ export const useAppStore = create<AppState>((set, get) => {
 
     init: async () => {
       try {
-        const [settings, apiKey] = await Promise.all([loadSettings(), loadApiKey()]);
+        const settings = await loadSettings();
+        // Key 按供应商分开存；这里读的是设置里当前选中的那家
+        const apiKey = await loadApiKey(settings.aiProviderId);
         set({ settings, apiKey });
 
         set({ libraryBusy: true });
@@ -582,9 +591,17 @@ export const useAppStore = create<AppState>((set, get) => {
     dismissCapturePreview: () => set({ capturePreview: null }),
 
     updateSettings: async (patch) => {
-      const next = { ...get().settings, ...patch };
+      const previous = get().settings;
+      const next = { ...previous, ...patch };
       set({ settings: next });
       await saveSettings(next);
+
+      // 切换供应商：Key 按供应商分开存，换一家就换一把
+      if (patch.aiProviderId !== undefined && next.aiProviderId !== previous.aiProviderId) {
+        const key = await loadApiKey(next.aiProviderId);
+        set({ apiKey: key });
+      }
+
       // 「照片保存位置」改了要立刻写给相机，否则要等下次联机才生效
       if (patch.captureTarget !== undefined && transport?.setCaptureTarget) {
         void transport.setCaptureTarget(next.captureTarget).catch(() => {});
@@ -597,17 +614,19 @@ export const useAppStore = create<AppState>((set, get) => {
         notify('warn', 'Key 不能为空');
         return;
       }
-      await saveApiKey(trimmed);
+      const providerId = get().settings.aiProviderId;
+      await saveApiKey(providerId, trimmed);
       set({ apiKey: trimmed });
-      notify('ok', 'API Key 已存入系统安全存储');
-      eventLog.info('settings.key.saved');
+      notify('ok', `${findProvider(providerId).name} 的 Key 已存入系统安全存储`);
+      eventLog.info('settings.key.saved', { provider: providerId });
     },
 
     removeKey: async () => {
-      await clearApiKey();
+      const providerId = get().settings.aiProviderId;
+      await clearApiKey(providerId);
       set({ apiKey: null });
-      notify('ok', 'API Key 已清除');
-      eventLog.info('settings.key.cleared');
+      notify('ok', `已清除 ${findProvider(providerId).name} 的 Key`);
+      eventLog.info('settings.key.cleared', { provider: providerId });
     },
 
     flushSessions: async () => {

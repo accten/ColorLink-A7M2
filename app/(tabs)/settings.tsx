@@ -1,15 +1,24 @@
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
-import React, { useCallback, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
+import * as Linking from 'expo-linking';
+import React, { useCallback, useMemo, useState } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
 
 import { eventLog } from '@/core/log';
+import { AI_PROVIDERS, effectiveAiConfig, findProvider, normalizeAiBaseUrl } from '@/core/aiProvider';
 import { PREVIEW_SECONDS_OPTIONS, previewSecondsLabel } from '@/core/capturePreview';
 import { CAPTURE_TARGET_OPTIONS } from '@/core/captureTarget';
-import { Button, Card, Hairline, Label, Row, Screen, Segmented, Sheet, T } from '@/design/ui';
+import { Button, Card, Banner, Hairline, Label, Row, Screen, Segmented, Sheet, T } from '@/design/ui';
 import { color, radius, space, typography } from '@/design/tokens';
 import { logFile, writeTextAtomic } from '@/services/paths';
-import { EXPORT_QUALITY_OPTIONS, EXPORT_SIZE_OPTIONS, exportQualityLabel, exportSizeLabel, maskKey } from '@/services/settings';
+import {
+  EXPORT_QUALITY_OPTIONS,
+  EXPORT_SIZE_OPTIONS,
+  exportQualityLabel,
+  exportSizeLabel,
+  maskKey,
+} from '@/services/settings';
+import { probeAiConnection } from '@/services/aiClient';
 import { isUsbTransportAvailable } from '@/services/camera/usb';
 import { CAPTURE_DESTINATION_PROBES, CAPTURE_HANDLE_PROBES, PROBE_PRESETS, PROBE_SEQUENCE, formatProbeResult, probeVendorOp, type ProbeResult } from '@/services/camera/sonyProbe';
 import { useAppStore } from '@/state/useAppStore';
@@ -35,9 +44,15 @@ export default function SettingsScreen() {
   const [probeBusy, setProbeBusy] = useState(false);
   const [probeResult, setProbeResult] = useState<ProbeResult | null>(null);
   const [sequenceText, setSequenceText] = useState('');
+  const [providerSheet, setProviderSheet] = useState(false);
+  const [editField, setEditField] = useState<'baseUrl' | 'model' | null>(null);
+  const [draftField, setDraftField] = useState('');
+  const [testingAi, setTestingAi] = useState(false);
 
   const usbReady = isUsbTransportAvailable();
   const thumbCount = assets.filter((a) => (a.thumbUri ?? '').includes('/thumbs/')).length;
+  /** 设置页展示的"最终生效配置"（供应商默认 + 用户覆盖） */
+  const aiConfig = useMemo(() => effectiveAiConfig(settings), [settings]);
 
   const openKeySheet = useCallback(() => {
     setDraftKey('');
@@ -45,13 +60,80 @@ export default function SettingsScreen() {
   }, []);
 
   const commitKey = useCallback(async () => {
-    if (draftKey.trim().length < 8) {
-      notify('warn', 'Key 看起来太短，请粘贴完整的 DeepSeek API Key');
+    const value = draftKey.trim();
+    if (!aiConfig.requiresKey && !value) {
+      // 本地模型不填 Key 也可以，直接关掉
+      setKeySheet(false);
       return;
     }
-    await saveKey(draftKey);
+    if (value.length < 4) {
+      notify('warn', 'Key 看起来太短，请粘贴完整的 API Key');
+      return;
+    }
+    await saveKey(value);
     setKeySheet(false);
-  }, [draftKey, notify, saveKey]);
+  }, [aiConfig.requiresKey, draftKey, notify, saveKey]);
+
+  const selectProvider = useCallback(
+    async (providerId: string) => {
+      setProviderSheet(false);
+      // 换供应商时清空地址/模型覆盖，回到该供应商的默认值
+      await updateSettings({ aiProviderId: providerId, aiBaseUrl: '', aiModel: '' });
+      const provider = findProvider(providerId);
+      notify('ok', `已切换到 ${provider.name}`);
+    },
+    [notify, updateSettings],
+  );
+
+  const openEdit = useCallback(
+    (field: 'baseUrl' | 'model') => {
+      setDraftField(field === 'baseUrl' ? aiConfig.baseUrl : aiConfig.model);
+      setEditField(field);
+    },
+    [aiConfig.baseUrl, aiConfig.model],
+  );
+
+  const commitEdit = useCallback(async () => {
+    if (!editField) return;
+    const text = draftField.trim();
+
+    if (editField === 'baseUrl') {
+      const normalized = normalizeAiBaseUrl(text);
+      if (text && !normalized) {
+        notify('warn', '请求地址无效：只支持 http/https');
+        return;
+      }
+      await updateSettings({ aiBaseUrl: normalized });
+      notify('ok', normalized ? `请求地址已保存：${normalized}` : `已恢复 ${aiConfig.providerName} 的默认地址`);
+    } else {
+      await updateSettings({ aiModel: text });
+      notify('ok', text ? `模型已保存：${text}` : `已恢复 ${aiConfig.providerName} 的默认模型`);
+    }
+    setEditField(null);
+  }, [aiConfig.providerName, draftField, editField, notify, updateSettings]);
+
+  const runAiTest = useCallback(async () => {
+    if (testingAi) return;
+    setTestingAi(true);
+    try {
+      const state = useAppStore.getState();
+      const config = effectiveAiConfig(state.settings);
+      const result = await probeAiConnection(config, state.apiKey);
+      notify(result.ok ? 'ok' : 'danger', result.message);
+      eventLog.info('ai.test', { ok: result.ok, provider: config.providerId, latencyMs: result.latencyMs });
+    } finally {
+      setTestingAi(false);
+    }
+  }, [notify, testingAi]);
+
+  const openProviderDocs = useCallback(() => {
+    const docs = aiConfig.provider.docs;
+    if (!docs) {
+      notify('warn', '该供应商没有登记文档地址');
+      return;
+    }
+    void Linking.openURL(docs).catch(() => notify('warn', '无法打开浏览器'));
+  }, [aiConfig.provider.docs, notify]);
 
   const exportLogs = useCallback(async () => {
     try {
@@ -145,18 +227,51 @@ export default function SettingsScreen() {
         <Label>AI 调色</Label>
         <Card style={{ marginTop: space.sm }}>
           <Row
-            label="DeepSeek API Key"
-            value={maskKey(apiKey)}
-            hint="存入系统安全存储（Keystore），不写日志、不进构建产物"
+            label="供应商"
+            value={aiConfig.providerName}
+            hint="点开选择常用供应商：名称、请求地址、默认模型都列在里面"
+            onPress={() => setProviderSheet(true)}
+          />
+          <Hairline />
+          <Pressable onPress={() => openEdit('baseUrl')} style={styles.fieldRow}>
+            <View style={styles.fieldHead}>
+              <T variant="body">请求地址</T>
+              <Ionicons name="create-outline" size={14} color={color.textFaint} />
+            </View>
+            <T variant="monoMuted" style={{ marginTop: 4 }} numberOfLines={2}>
+              {aiConfig.baseUrl || '未填写（点这里填写）'}
+            </T>
+            <T variant="monoMuted" style={[styles.fieldHint, { color: color.textFaint }]} numberOfLines={1}>
+              实际请求：{aiConfig.chatUrl || '—'}
+            </T>
+          </Pressable>
+          <Hairline />
+          <Pressable onPress={() => openEdit('model')} style={styles.fieldRow}>
+            <View style={styles.fieldHead}>
+              <T variant="body">模型</T>
+              <Ionicons name="create-outline" size={14} color={color.textFaint} />
+            </View>
+            <T variant="mono" style={{ marginTop: 4 }}>
+              {aiConfig.model || '未填写（点这里填写）'}
+            </T>
+            <T variant="monoMuted" style={[styles.fieldHint, { color: color.textFaint }]}>
+              必须是支持图片输入（vision）的模型，否则会被供应商拒绝
+            </T>
+          </Pressable>
+          <Hairline />
+          <Row
+            label="API Key"
+            value={aiConfig.requiresKey ? maskKey(apiKey) : '本地地址，可不填'}
+            hint={`按供应商分开保存，只存在本机安全存储；当前是 ${aiConfig.providerName}`}
             onPress={openKeySheet}
           />
           {apiKey ? (
             <>
               <Hairline />
               <Row
-                label="清除 Key"
+                label="清除当前供应商的 Key"
                 onPress={() =>
-                  Alert.alert('清除 API Key？', '清除后 AI 调色入口会置灰。', [
+                  Alert.alert('清除 API Key？', `清除后 ${aiConfig.providerName} 的 AI 调色入口会置灰。`, [
                     { text: '取消', style: 'cancel' },
                     { text: '清除', style: 'destructive', onPress: () => void removeKey() },
                   ])
@@ -165,7 +280,34 @@ export default function SettingsScreen() {
               />
             </>
           ) : null}
+          <Hairline />
+          <Row
+            label="测试连接"
+            value={testingAi ? '测试中…' : undefined}
+            hint="先试 /models，再发一条 1 token 请求；结果会显示在通知里"
+            onPress={() => void runAiTest()}
+          />
+          {aiConfig.provider.docs ? (
+            <>
+              <Hairline />
+              <Row
+                label="获取 Key / 接口文档"
+                value={aiConfig.provider.name}
+                onPress={openProviderDocs}
+                right={<Ionicons name="open-outline" size={15} color={color.textFaint} />}
+              />
+            </>
+          ) : null}
+          {aiConfig.missing ? (
+            <View style={{ marginTop: space.sm }}>
+              <Banner tone="warn" text={`${aiConfig.missing}，AI 调色暂不可用。点上面的「供应商」选择一家，或填写自定义地址。`} />
+            </View>
+          ) : null}
         </Card>
+        <T variant="monoMuted" style={{ marginTop: space.sm }}>
+          请求走 OpenAI 兼容的 /chat/completions（图片以 data URL 放在 image_url 里）。
+          除 AI 调色外，其余功能完全离线。
+        </T>
       </View>
 
       {/* 导出 */}
@@ -379,9 +521,12 @@ export default function SettingsScreen() {
           </View>
         ) : null}
       </Sheet>
-      <Sheet visible={keySheet} onClose={() => setKeySheet(false)} title="DeepSeek API Key">
+      <Sheet visible={keySheet} onClose={() => setKeySheet(false)} title={`${aiConfig.providerName} API Key`}>
         <T variant="monoMuted" style={{ marginBottom: space.sm }}>
-          从 platform.deepseek.com 获取。Key 只保存在本机安全存储里。
+          {aiConfig.provider.docs
+            ? `从 ${aiConfig.provider.docs} 获取。`
+            : `在 ${aiConfig.providerName} 控制台获取。`}
+          Key 只保存在本机安全存储里，按供应商分开存。
         </T>
         <TextInput
           value={draftKey}
@@ -393,9 +538,76 @@ export default function SettingsScreen() {
           autoCorrect={false}
           secureTextEntry
         />
+        {!aiConfig.requiresKey ? (
+          <T variant="monoMuted" style={{ marginTop: space.xs }}>
+            当前是本地地址，Key 可以不填（留空点保存即可）。
+          </T>
+        ) : null}
         <View style={{ flexDirection: 'row', gap: space.sm, marginTop: space.md }}>
           <Button title="取消" onPress={() => setKeySheet(false)} variant="ghost" style={{ flex: 1 }} />
           <Button title="保存" onPress={() => void commitKey()} variant="primary" style={{ flex: 1 }} />
+        </View>
+      </Sheet>
+
+      <Sheet visible={providerSheet} onClose={() => setProviderSheet(false)} title="AI 供应商">
+        <T variant="monoMuted" style={{ marginBottom: space.sm }}>
+          选一家会带出它默认的请求地址与模型，选完仍可手动修改；切换供应商会重置这两项。
+        </T>
+        <ScrollView style={{ maxHeight: 430 }} showsVerticalScrollIndicator={false}>
+          {AI_PROVIDERS.map((provider) => {
+            const active = provider.id === aiConfig.providerId;
+            return (
+              <Pressable
+                key={provider.id}
+                onPress={() => void selectProvider(provider.id)}
+                style={[styles.providerRow, active && styles.providerRowActive]}
+              >
+                <View style={{ flex: 1, paddingRight: space.sm }}>
+                  <T variant="body" style={{ fontSize: 14, fontWeight: '600' }}>
+                    {provider.name}
+                  </T>
+                  <T variant="monoMuted" style={{ marginTop: 2 }} numberOfLines={2}>
+                    {provider.baseUrl || '需要填写完整地址'}
+                  </T>
+                  <T variant="monoMuted" style={{ marginTop: 2, color: color.textFaint }} numberOfLines={2}>
+                    {provider.note}
+                    {provider.vision ? '' : ' · 官方未提供视觉能力'}
+                  </T>
+                </View>
+                {active ? <Ionicons name="checkmark-circle" size={18} color={color.accent} /> : null}
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+        <T variant="monoMuted" style={{ marginTop: space.sm }}>
+          所有供应商都按 OpenAI 兼容协议调用（/chat/completions）。地址可指向自建网关
+          （one-api / new-api 等），填到 /v1 即可。
+        </T>
+      </Sheet>
+
+      <Sheet
+        visible={editField !== null}
+        onClose={() => setEditField(null)}
+        title={editField === 'baseUrl' ? '请求地址' : '模型名'}
+      >
+        <T variant="monoMuted" style={{ marginBottom: space.sm }}>
+          {editField === 'baseUrl'
+            ? '填到 /v1 或完整的 /chat/completions 都可以，结尾斜杠会自动处理；本地模型用 http://IP:端口/v1。'
+            : '填供应商控制台里的模型名（区分大小写）；火山方舟通常填 ep- 开头的接入点 ID。留空 = 用供应商默认模型。'}
+        </T>
+        <TextInput
+          value={draftField}
+          onChangeText={setDraftField}
+          placeholder={editField === 'baseUrl' ? 'https://api.example.com/v1' : 'model-name'}
+          placeholderTextColor={color.textFaint}
+          style={styles.input}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <View style={{ flexDirection: 'row', gap: space.sm, marginTop: space.md }}>
+          <Button title="恢复默认" onPress={() => setDraftField('')} variant="ghost" style={{ flex: 1 }} />
+          <Button title="取消" onPress={() => setEditField(null)} variant="ghost" style={{ flex: 1 }} />
+          <Button title="保存" onPress={() => void commitEdit()} variant="primary" style={{ flex: 1 }} />
         </View>
       </Sheet>
 
@@ -420,5 +632,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.md,
     paddingVertical: space.md,
     fontSize: 13,
+  },
+  fieldRow: { paddingVertical: space.md },
+  fieldHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  fieldHint: { marginTop: 3 },
+  providerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: space.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: color.hairline,
+  },
+  providerRowActive: {
+    backgroundColor: 'rgba(232,223,207,0.06)',
   },
 });

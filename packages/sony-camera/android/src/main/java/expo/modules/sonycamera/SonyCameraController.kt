@@ -867,8 +867,10 @@ internal class SonyCameraController(private val context: Context) {
       val info = runCatching { active.objectInfo(handle) }.getOrNull()
       if (info != null && !SonyPtpCodec.isJpegObjectFormat(info.format)) {
         trace(
-          "body shutter: object format=0x%04X (%s) is not JPEG; skipping".format(info.format, info.name),
+          "body shutter: object format=0x%04X (%s) is not JPEG; discarding".format(info.format, info.name),
         )
+        // 读走并丢弃：不读的话句柄不会前进，下一枪就永远取不到（真机踩到过）。
+        runCatching { active.fetchObject(handle) }
         updateState(
           "ready",
           if (SonyPtpCodec.isSonyRawObjectFormat(info.format)) {
