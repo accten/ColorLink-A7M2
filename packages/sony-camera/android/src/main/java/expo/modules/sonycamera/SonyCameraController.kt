@@ -394,8 +394,10 @@ internal class SonyCameraController(private val context: Context) {
       trace("stream session=$streamSessionId started protocol=${if (scalarTransport != null) "scalar" else "ptp2"}")
       while (streaming.get()) {
         var startedAt = SystemClock.elapsedRealtime()
+        // 在 try 外声明：catch 里的"唤醒相机 + 重启取景"也要用得到
+        var activeTransport: SonyPtpTransport? = null
         try {
-          val activeTransport = transport
+          activeTransport = transport
           val activeScalar = scalarTransport
           if (activeTransport == null && activeScalar == null) break
           if (!liveViewPrepared) {
@@ -411,8 +413,9 @@ internal class SonyCameraController(private val context: Context) {
             // pacing window; the camera needs a short quiet interval here.
             startedAt = SystemClock.elapsedRealtime()
           }
-          if (activeTransport != null && frameCount > 0 && frameCount % 10 == 0) {
-            activeTransport.pollCapturedJpeg()?.let(::persistCapturedJpeg)
+          val pollTransport = activeTransport
+          if (pollTransport != null && frameCount > 0 && frameCount % 10 == 0) {
+            pollTransport.pollCapturedJpeg()?.let(::persistCapturedJpeg)
           }
           val jpeg = activeScalar?.getLiveViewJpeg() ?: activeTransport?.getLiveViewJpeg()
           if (jpeg != null && jpeg.isNotEmpty()) {
@@ -471,13 +474,14 @@ internal class SonyCameraController(private val context: Context) {
           // 取景流"卡住"（相机睡着、或某一帧读超时）不等于联机失败。
           // 先尝试唤醒相机并重启推流一次：真机上"放着不动再进取景"只会来一两帧，
           // 而刚按过快门的那次能稳定 10fps——差别就是相机醒没醒。
-          if (!liveViewRecovered && activeTransport != null) {
+          val recoverTransport = activeTransport
+          if (!liveViewRecovered && recoverTransport != null) {
             liveViewRecovered = true
             trace("live view stalled (${error.message ?: "unknown"}); waking the camera and restarting")
-            activeTransport.wakeCameraByHalfPress()
-            activeTransport.setLiveViewActive(false)
+            recoverTransport.wakeCameraByHalfPress()
+            recoverTransport.setLiveViewActive(false)
             SystemClock.sleep(200)
-            activeTransport.setLiveViewActive(true)
+            recoverTransport.setLiveViewActive(true)
             SystemClock.sleep(600)
             liveViewPrepared = false
             continue
