@@ -73,9 +73,13 @@ export default function ConnectScreen() {
                     : '未连接'}
             </T>
           </View>
-          <Pill tone={camera.mode === 'demo' ? 'warn' : connected ? 'ok' : 'neutral'}>
-            {camera.mode === 'demo' ? '演示模式' : 'USB 联机'}
-          </Pill>
+          {/* 没连上时不显示模式徽章：IDLE_SNAPSHOT 的 mode 默认是 demo，
+              照搬会变成"未连接 + 演示模式"这种自相矛盾的显示。 */}
+          {connected || camera.phase === 'connecting' ? (
+            <Pill tone={camera.mode === 'demo' ? 'warn' : 'ok'}>
+              {camera.mode === 'demo' ? '演示模式' : 'USB 联机'}
+            </Pill>
+          ) : null}
         </View>
 
         <T variant="title" style={{ marginTop: space.lg }}>

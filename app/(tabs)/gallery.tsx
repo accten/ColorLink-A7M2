@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { Href, router } from 'expo-router';
+import { Href, router, useFocusEffect } from 'expo-router';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -90,6 +90,18 @@ export default function GalleryScreen() {
   const toggleAll = useCallback(() => {
     setSelected(allSelected ? new Set() : new Set(assets.map((asset) => asset.id)));
   }, [allSelected, assets]);
+
+  // 离开图库时退出多选：tab 页状态会被保留，否则切回来还是"已选 2 张"，
+  // 用户很容易在下一次误操作里把这两张一起删/批量导出。
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        setSelecting(false);
+        setSelected(new Set());
+        setSheet(null);
+      };
+    }, []),
+  );
 
   const handlePreset = useCallback(
     (presetId: string) => {
