@@ -398,7 +398,14 @@ internal class SonyCameraController(private val context: Context) {
           if (activeTransport == null && activeScalar == null) break
           if (!liveViewPrepared) {
             trace("preparing Sony live-view object handle")
-            if (activeScalar != null) activeScalar.startLiveView() else activeTransport?.prepareLiveView()
+            if (activeScalar != null) {
+              activeScalar.startLiveView()
+            } else {
+              // 先让相机开始产帧（D221=1）：不写这一条时相机给一两帧就不再更新虚拟句柄，
+              // 界面表现为"取景黑屏"。写入失败不致命，随后照样尝试读帧。
+              activeTransport?.setLiveViewActive(true)
+              activeTransport?.prepareLiveView()
+            }
             liveViewPrepared = true
             trace("live-view handle ready")
             // Do not count Sony's preparation time against the first frame's
@@ -482,6 +489,8 @@ internal class SonyCameraController(private val context: Context) {
         if (remaining > 0) SystemClock.sleep(remaining)
       }
       scalarTransport?.stopLiveView()
+      // 会话还在就把取景关掉（D221=0），别让相机一直空推帧
+      transport?.let { runCatching { it.setLiveViewActive(false) } }
       val elapsedMs = maxOf(1L, SystemClock.elapsedRealtime() - streamStartedAt)
       lastFps = 0.0
       trace("stream session=$streamSessionId stopped frames=$frameCount elapsedMs=$elapsedMs avgFps=${String.format(Locale.US, "%.2f", frameCount * 1_000.0 / elapsedMs)} maxGapMs=$largestFrameGapMs")
@@ -496,8 +505,7 @@ internal class SonyCameraController(private val context: Context) {
   private fun stopLiveView(preserveRequest: Boolean) {
     if (!preserveRequest) liveViewRequested.set(false)
     streaming.set(false)
-    scalarTransport?.stopLiveView()
-    // 不能只把 future 置空就走人：帧线程可能正卡在 bulkTransfer 里读那一帧。
+    scalarTransport?.stopLiveView()    // 不能只把 future 置空就走人：帧线程可能正卡在 bulkTransfer 里读那一帧。
     // 那种时候立刻发下一条 PTP 命令会把端点打乱（真机：取景中按快门 →
     // `USB bulk-IN retry=1 result=-1`，紧接着 `USB write failed`；相机没掉线但不再应答，只能重插）。
     val pending = frameFuture

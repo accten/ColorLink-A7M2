@@ -631,6 +631,24 @@ internal class SonyPtpTransport private constructor(
     return SonyObjectInfo(size = size, format = format, name = name)
   }
 
+  /**
+   * 让相机开始/停止推取景帧：`0xD221 LiveViewStatus`（UINT8，可写，属性数组里确认过）。
+   *
+   * 真机上不写这一条时：相机先给一两帧，然后就再也不更新 `0xFFFFC002` 了，
+   * 表现是"取景黑屏 + 读帧一直 `-1`"，而属性读取仍然正常（相机并没有睡着）。
+   * 写 1 之后帧才持续产生；停止取景时写回 0，别让相机一直空推。
+   */
+  fun setLiveViewActive(active: Boolean) {
+    val value = if (active) 1 else 0
+    runCatching {
+      execute(0x9205, intArrayOf(PROPERTY_LIVE_VIEW_STATUS), outgoingData = byteArrayOf(value.toByte()))
+      trace("Sony live-view D221=$value requested")
+    }.onFailure {
+      // 老固件可能不接受写这条属性；取景能不能出帧不依赖这次写入是否成功
+      trace("Sony live-view D221=$value rejected: ${it.message ?: "unknown"}")
+    }
+  }
+
   fun prepareLiveView() {
     // 参考实现的取景路径：直接 GetObject(0x1009) @ 0xFFFFC002，没有 D221 门禁。
     if (getObjectDirect(HANDLE_LIVE_VIEW) != null) {
