@@ -2,6 +2,7 @@ import { File } from 'expo-file-system';
 import { Asset as MediaAsset, requestPermissionsAsync } from 'expo-media-library';
 
 import { Asset, exportFileName, uniqueFileName } from '@/core/asset';
+import { CurveSet, isIdentityCurveSet } from '@/core/curve';
 import { Lut3D } from '@/core/lut';
 import { EditParams, isNeutral } from '@/core/params';
 import { eventLog } from '@/core/log';
@@ -30,6 +31,7 @@ export interface ExportOptions {
   asset: Asset;
   params: EditParams;
   lut?: Lut3D | null;
+  curves?: CurveSet | null;
   /** 长边；0 表示保持原图尺寸 */
   longEdge?: number;
   quality?: number;
@@ -70,13 +72,15 @@ export async function exportEdited(options: ExportOptions): Promise<ExportResult
       : fitWithin(sourceWidth, sourceHeight, longEdge);
 
   const started = Date.now();
-  const untouched = isNeutral(params) && !options.lut;
+  const curvesActive = options.curves ? !isIdentityCurveSet(options.curves) : false;
+  const untouched = isNeutral(params) && !options.lut && !curvesActive;
   const jpeg = untouched
     ? bytes
     : renderGradedJpeg({
         image,
         params,
         lut: options.lut ?? null,
+        curves: options.curves ?? null,
         width: target.width,
         height: target.height,
         quality,

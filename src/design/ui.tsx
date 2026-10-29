@@ -352,6 +352,56 @@ export function Segmented<T extends string>({
 }
 
 /**
+ * 横向可滚动的标签条。
+ *
+ * 调色面板从 4 组涨到 6 组（光/色/HSL/曲线/细节/效果），Segmented 在窄屏上
+ * 会把每个标签挤成两个字；标签条让每个分组都有足够的点击宽度。
+ */
+export function TabStrip<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+}) {
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.tabStrip}
+      keyboardShouldPersistTaps="handled"
+    >
+      {options.map((opt) => {
+        const active = opt.value === value;
+        return (
+          <Pressable
+            key={opt.value}
+            onPress={() => onChange(opt.value)}
+            style={[styles.tabChip, active && styles.tabChipActive]}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: active }}
+          >
+            <Text
+              style={{
+                color: active ? color.text : color.textMuted,
+                fontSize: 12.5,
+                fontWeight: '600',
+                letterSpacing: -0.1,
+              }}
+              numberOfLines={1}
+            >
+              {opt.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+/**
  * 自绘滑块：PanResponder + 绝对坐标（pageX）。
  *
  * 用 pageX 而不是 locationX：locationX 是相对"被按到的那个子视图"算的，
@@ -646,6 +696,20 @@ export const styles = StyleSheet.create({
   segmentActive: {
     backgroundColor: color.surfaceHi,
     borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.hairlineStrong,
+  },
+  tabStrip: { gap: 6, paddingRight: space.lg, paddingVertical: 2 },
+  tabChip: {
+    height: 30,
+    paddingHorizontal: space.md,
+    justifyContent: 'center',
+    borderRadius: radius.pill,
+    backgroundColor: color.bgElev,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.hairline,
+  },
+  tabChipActive: {
+    backgroundColor: color.surfaceHi,
     borderColor: color.hairlineStrong,
   },
   track: {

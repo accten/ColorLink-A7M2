@@ -5,7 +5,7 @@ import React, { useCallback, useEffect } from 'react';
 import { Alert, Pressable, StyleSheet, View } from 'react-native';
 
 import { formatBytes, formatClock, formatDimensions } from '@/core/asset';
-import { describeParams } from '@/core/params';
+import { describeSession } from '@/core/session';
 import { Button, Card, Dot, Hairline, Label, Pill, Screen, Stat, T } from '@/design/ui';
 import { color, radius, space } from '@/design/tokens';
 import { isUsbTransportAvailable } from '@/services/camera/usb';
@@ -208,7 +208,7 @@ export default function ConnectScreen() {
         <View style={{ marginTop: space.xl }}>
           <Label>最近一张的调色</Label>
           <T variant="monoMuted" style={{ marginTop: 6 }}>
-            {describeParams(latestSession?.params ?? { ...useAppStore.getState().session(assets[0].id).params })}
+            {describeSession(latestSession ?? useAppStore.getState().session(assets[0].id))}
           </T>
         </View>
       ) : null}

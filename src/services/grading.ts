@@ -12,6 +12,7 @@ import {
 } from '@shopify/react-native-skia';
 
 import { Lut3D, identityLut, packLut } from '@/core/lut';
+import { CurveSet, buildCurveTable, CURVE_TABLE_SIZE, defaultCurveSet, isIdentityCurveSet } from '@/core/curve';
 import { EditParams } from '@/core/params';
 import { GRADE_SKSL } from '@/features/grading/shader';
 import { fitWithin, uniformsFor, uniformsObject } from '@/core/grade';
@@ -67,6 +68,47 @@ export function placeholderLutImage(): SkImage | null {
   if (placeholder) return placeholder;
   placeholder = imageFromRgba(packLut(identityLut(2)));
   return placeholder;
+}
+
+/* ------------------------------------------------------------------ */
+/* 色调曲线纹理（256×1，R/G/B = 复合曲线结果）                           */
+/* ------------------------------------------------------------------ */
+
+let identityCurveImage: SkImage | null = null;
+const curveImageCache = new Map<string, SkImage>();
+const CURVE_CACHE_LIMIT = 24;
+
+function curveKey(set: CurveSet): string {
+  // 控制点最多 10 个/通道，序列化开销远小于重建纹理；用内容做键才能命中
+  return JSON.stringify([set.rgb, set.r, set.g, set.b]);
+}
+
+export function curveSkImage(set: CurveSet | null | undefined): SkImage | null {
+  const curves = set ?? defaultCurveSet();
+  const key = curveKey(curves);
+  const cached = curveImageCache.get(key);
+  if (cached) return cached;
+
+  const image = imageFromRgba({
+    width: CURVE_TABLE_SIZE,
+    height: 1,
+    pixels: buildCurveTable(curves),
+  });
+  if (image) {
+    if (curveImageCache.size >= CURVE_CACHE_LIMIT) {
+      const oldest = curveImageCache.keys().next().value;
+      if (oldest !== undefined) curveImageCache.delete(oldest);
+    }
+    curveImageCache.set(key, image);
+  }
+  return image;
+}
+
+/** 恒等曲线纹理：shader 必须有 curve 子节点，不能为空。 */
+export function placeholderCurveImage(): SkImage | null {
+  if (identityCurveImage) return identityCurveImage;
+  identityCurveImage = imageFromRgba({ width: CURVE_TABLE_SIZE, height: 1, pixels: buildCurveTable(defaultCurveSet()) });
+  return identityCurveImage;
 }
 
 export function decodeImage(bytes: Uint8Array): SkImage | null {
@@ -192,6 +234,7 @@ export interface RenderOptions {
   image: SkImage;
   params: EditParams;
   lut?: Lut3D | null;
+  curves?: CurveSet | null;
   width: number;
   height: number;
   quality?: number;
@@ -238,11 +281,22 @@ export function renderGradedJpeg(options: RenderOptions): Uint8Array {
 
   const lut = lutSkImage(options.lut) ?? placeholderLutImage();
   if (!lut) throw new Error('LUT 纹理创建失败');
+  const curve = curveSkImage(options.curves) ?? placeholderCurveImage();
+  if (!curve) throw new Error('曲线纹理创建失败');
 
   const lutShader = lut.makeShaderOptions(TileMode.Clamp, TileMode.Clamp, FilterMode.Nearest, MipmapMode.None);
+  const curveShader = curve.makeShaderOptions(TileMode.Clamp, TileMode.Clamp, FilterMode.Linear, MipmapMode.None);
 
-  const uniforms = uniformsFor(options.params, width, height, options.lut?.size ?? 2, Boolean(options.lut));
-  const shader = effect.makeShaderWithChildren(uniforms, [sourceShader, lutShader]);
+  const hasCurve = options.curves ? !isIdentityCurveSet(options.curves) : false;
+  const uniforms = uniformsFor(
+    options.params,
+    width,
+    height,
+    options.lut?.size ?? 2,
+    Boolean(options.lut),
+    hasCurve,
+  );
+  const shader = effect.makeShaderWithChildren(uniforms, [sourceShader, lutShader, curveShader]);
   paint.setShader(shader);
   canvas.drawRect(Skia.XYWHRect(0, 0, width, height), paint);
 

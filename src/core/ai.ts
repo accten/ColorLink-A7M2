@@ -8,7 +8,7 @@
  *  - 图片只能出现在 user 消息里
  */
 
-import { EditParams, normalizeParams } from './params';
+import { EditParams, PARAM_KEYS, normalizeParams } from './params';
 
 export const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
 export const DEEPSEEK_MODEL = 'deepseek-flash';
@@ -21,23 +21,35 @@ JSON 字段与取值范围（越界值会被裁剪，缺失字段按默认值处
   "brightness":  -100..100,   // 亮度
   "contrast":    -100..100,   // 对比度
   "saturation":  -100..100,   // 饱和度
+  "vibrance":    -100..100,   // 自然饱和度（优先作用于低饱和区）
+  "hue":         -180..180,   // 整体色相旋转（度）
   "temperature": -100..100,   // 色温，正=暖
   "tint":        -100..100,   // 色调，正=偏洋红
   "highlights":  -100..100,   // 高光
   "shadows":     -100..100,   // 阴影
+  "whites":      -100..100,   // 白场端点
+  "blacks":      -100..100,   // 黑场端点
+  "fade":           0..100,   // 褪色/哑光（抬黑位）
+  "dehaze":      -100..100,   // 去雾（正=去灰、负=加雾）
+  "splitShadowHue":     0..360, // 阴影染色色相角
+  "splitShadowSat":     0..100, // 阴影染色浓度
+  "splitHighlightHue":  0..360, // 高光染色色相角
+  "splitHighlightSat":  0..100, // 高光染色浓度
   "sharpen":        0..100,   // 锐化
   "clarity":        0..100,   // 清晰度
+  "noiseReduction": 0..100,   // 降噪
   "grain":          0..100,   // 颗粒
   "vignette":       0..100,   // 暗角
   "lutStrength":    0..100    // LUT 浓度
 }
+注意：HSL 八色带与色调曲线留给用户手动微调，你不要输出这些字段。
 
 输出示例（必须是合法 json）：
-{"brightness":4,"contrast":10,"saturation":-8,"temperature":12,"tint":2,"highlights":-14,"shadows":10,"sharpen":4,"clarity":6,"grain":14,"vignette":8,"lutStrength":100}
+{"brightness":4,"contrast":10,"saturation":-8,"vibrance":6,"hue":0,"temperature":12,"tint":2,"highlights":-14,"shadows":10,"whites":4,"blacks":-2,"fade":6,"dehaze":0,"splitShadowHue":210,"splitShadowSat":12,"splitHighlightHue":40,"splitHighlightSat":10,"sharpen":4,"clarity":6,"noiseReduction":0,"grain":14,"vignette":8,"lutStrength":100}
 
 规则：
 1. 结合画面实际内容与用户意图给出整体协调的参数，不要把每个字段都拉满。
-2. 用户说"胶片/电影感"时，可以提高 grain(8~20) 与 vignette(5~15)、压低 highlights、略降 saturation。
+2. 用户说"胶片/电影感"时，可以提高 grain(8~20)、fade(8~20) 与 vignette(5~15)、压低 highlights、略降 saturation。
 3. 用户给的是增量指令（例如"再暖一点""天空更蓝"）时，在 currentParams 基础上做小幅调整，通常 ±5~20。
 4. currentParams 是当前已生效的参数；除非用户明确要求重置，不要无故清零。
 5. 只输出一个 json 对象，字段名与上面完全一致。`;
@@ -159,7 +171,7 @@ export function parseGradeContent(content: string | null | undefined): ParsedGra
 
   const { params, warnings } = normalizeParams(parsed as Record<string, unknown>);
   const numericKeys = Object.keys(parsed as Record<string, unknown>).filter((k) =>
-    ['brightness', 'contrast', 'saturation', 'temperature', 'tint', 'highlights', 'shadows', 'sharpen', 'clarity', 'grain', 'vignette', 'lutStrength'].includes(k),
+    PARAM_KEYS.includes(k as (typeof PARAM_KEYS)[number]),
   );
   if (!numericKeys.length) {
     return { ok: false, warnings, reason: '返回的 JSON 里没有任何已知调色字段' };

@@ -6,7 +6,7 @@ import { DEMO_FRAMES } from '@/features/demo/frames';
 import { CapturedPhoto } from '@/services/camera/types';
 import { seedDemoFrame } from '@/services/demoAssets';
 
-import { ensureDirs, indexFile, readTextSafe, writeTextAtomic } from './paths';
+import { ensureDirs, indexFile, previewFile, readTextSafe, thumbFile, writeTextAtomic } from './paths';
 
 /**
  * 图库索引（JSON 持久化）。
@@ -129,6 +129,15 @@ export async function deleteAssetFile(asset: Asset): Promise<void> {
     if (file.exists) file.delete();
   } catch (error) {
     eventLog.warn('library.delete.failed', { uri: asset.uri, error: String(error) });
+  }
+
+  // 派生图跟着删，否则删了照片还留一堆 thumbs/previews
+  for (const target of [thumbFile(`${asset.id}.jpg`), previewFile(`${asset.id}.jpg`)]) {
+    try {
+      if (target.exists) target.delete();
+    } catch (error) {
+      eventLog.warn('library.delete.derivative.failed', { uri: target.uri, error: String(error) });
+    }
   }
 }
 

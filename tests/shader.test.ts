@@ -19,12 +19,12 @@ const uniformDecls = [...GRADE_SKSL.matchAll(/uniform\s+(shader|float2|float)\s+
 describe('SKSL uniform 契约', () => {
   it('声明的 uniform 数量与顺序严格匹配 JS 侧', () => {
     const names = uniformDecls.map((u) => u.name);
-    expect(names).toEqual(['img', 'lut', ...UNIFORM_PREFIX, ...PARAM_KEYS]);
+    expect(names).toEqual(['img', 'lut', 'curve', ...UNIFORM_PREFIX, ...PARAM_KEYS]);
   });
 
-  it('两个 shader 子节点顺序固定为 img、lut', () => {
+  it('三个 shader 子节点顺序固定为 img、lut、curve', () => {
     const shaders = uniformDecls.filter((u) => u.type === 'shader').map((u) => u.name);
-    expect(shaders).toEqual(['img', 'lut']);
+    expect(shaders).toEqual(['img', 'lut', 'curve']);
   });
 
   it('没有重复声明', () => {
@@ -69,6 +69,43 @@ describe('LUT 采样与打包布局同步', () => {
 
   it('没有 LUT 时跳过采样（hasLut 门控）', () => {
     expect(GRADE_SKSL).toContain('hasLut > 0.5');
+  });
+});
+
+describe('色调曲线纹理契约', () => {
+  it('按像素坐标取样，且 0..1 映射到 256 个像素中心', () => {
+    expect(GRADE_SKSL).toContain('float(s.r) * 255.0 + 0.5');
+    expect(GRADE_SKSL).toContain('float(s.g) * 255.0 + 0.5');
+    expect(GRADE_SKSL).toContain('float(s.b) * 255.0 + 0.5');
+  });
+
+  it('三个通道各自取样（纹理里已经是主曲线 ∘ 单通道曲线）', () => {
+    expect(GRADE_SKSL).toMatch(/curve\.eval\(float2\(float\(s\.r\)[\s\S]{0,40}\)\.r/);
+    expect(GRADE_SKSL).toMatch(/curve\.eval\(float2\(float\(s\.g\)[\s\S]{0,40}\)\.g/);
+    expect(GRADE_SKSL).toMatch(/curve\.eval\(float2\(float\(s\.b\)[\s\S]{0,40}\)\.b/);
+  });
+
+  it('曲线在分离色调之后、锐化之前', () => {
+    const splitIdx = GRADE_SKSL.indexOf('splitColor(splitShadowHue');
+    const curveIdx = GRADE_SKSL.indexOf('c = applyCurve(c);');
+    const sharpenIdx = GRADE_SKSL.indexOf('sharpen / 100.0');
+    expect(curveIdx).toBeGreaterThan(splitIdx);
+    expect(curveIdx).toBeLessThan(sharpenIdx);
+  });
+});
+
+describe('HSL 八色带契约', () => {
+  it('八个色带都用同一套权重函数，并按最大权重归一化', () => {
+    expect(GRADE_SKSL).toContain('half bandWeight(');
+    expect(GRADE_SKSL.match(/bandWeight\(hueDeg/g)?.length).toBe(8);
+    // 按最大权重归一：色带中心必须拿到 100% 调整量（按和会被邻居色带稀释）
+    expect(GRADE_SKSL).toContain('half wMax = max(');
+    expect(GRADE_SKSL).toContain('/ wNorm');
+  });
+
+  it('色相旋转按度数（/360）换算', () => {
+    expect(GRADE_SKSL).toContain('hue / 360.0');
+    expect(GRADE_SKSL).toContain('dHue * (60.0 / 360.0) / 100.0');
   });
 });
 

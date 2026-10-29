@@ -6,16 +6,20 @@ import { Directory, File, Paths } from 'expo-file-system';
  *   <document>/colorlink/
  *   ├── ingest/     原图（只读，永不修改）
  *   ├── edited/     调色输出
+ *   ├── thumbs/     480px 列表缩略图
+ *   ├── previews/   1600px 编辑预览图（编辑器秒开用）
  *   ├── luts/       导入的 .cube
  *   ├── presets/    预设 JSON
  *   ├── logs/       日志导出
- *   └── index.json  资产索引
+ *   ├── index.json  资产索引
+ *   └── sessions.json 编辑会话（参数 + 曲线 + LUT）
  */
 
 export const rootDir = new Directory(Paths.document, 'colorlink');
 export const ingestDir = new Directory(rootDir, 'ingest');
 export const editedDir = new Directory(rootDir, 'edited');
 export const thumbsDir = new Directory(rootDir, 'thumbs');
+export const previewsDir = new Directory(rootDir, 'previews');
 export const lutsDir = new Directory(rootDir, 'luts');
 export const presetsDir = new Directory(rootDir, 'presets');
 export const logsDir = new Directory(rootDir, 'logs');
@@ -23,8 +27,9 @@ export const logsDir = new Directory(rootDir, 'logs');
 export const indexFile = new File(rootDir, 'index.json');
 export const settingsFile = new File(rootDir, 'settings.json');
 export const presetsFile = new File(rootDir, 'presets.json');
+export const sessionsFile = new File(rootDir, 'sessions.json');
 
-const ALL_DIRS = [rootDir, ingestDir, editedDir, thumbsDir, lutsDir, presetsDir, logsDir];
+const ALL_DIRS = [rootDir, ingestDir, editedDir, thumbsDir, previewsDir, lutsDir, presetsDir, logsDir];
 
 let prepared = false;
 
@@ -47,6 +52,11 @@ export function ingestFile(name: string): File {
 export function thumbFile(name: string): File {
   ensureDirs();
   return new File(thumbsDir, name);
+}
+
+export function previewFile(name: string): File {
+  ensureDirs();
+  return new File(previewsDir, name);
 }
 
 export function editedFile(name: string): File {

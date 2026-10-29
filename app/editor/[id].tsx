@@ -23,19 +23,35 @@ import {
   PARAM_META,
   ParamKey,
   diffParams,
+  hslParamKeys,
   isNeutral,
+  type GroupKey,
+  type HslBandKey,
 } from '@/core/params';
+import {
+  IDENTITY_CURVE_SET,
+  defaultCurveSet,
+  identityCurve,
+  isIdentityCurveSet,
+  type CurveChannel,
+  type CurvePoint,
+  type CurveSet,
+} from '@/core/curve';
 import { Lut3D } from '@/core/lut';
 import { eventLog } from '@/core/log';
-import { Button, Label, ParamRow, Segmented, T } from '@/design/ui';
+import { Button, Label, ParamRow, Segmented, TabStrip, T } from '@/design/ui';
 import { color, radius, space, typography } from '@/design/tokens';
 import { useThrottledCallback } from '@/design/useThrottledCallback';
+import { CurveEditor } from '@/components/editor/CurveEditor';
+import { HslPanel } from '@/components/editor/HslPanel';
 import {
   computeHistogram,
+  curveSkImage,
   decodeImage,
   getGradeEffect,
   lutSkImage,
   makePreviewImage,
+  placeholderCurveImage,
   placeholderLutImage,
   uniformsObject,
   type Histogram,
@@ -43,6 +59,7 @@ import {
 import { exportEdited } from '@/services/exportImage';
 import { importLutFromPicker, loadLutFromPath } from '@/services/lutStore';
 import { requestGrade } from '@/services/aiClient';
+import { ensurePreview, existingPreview } from '@/services/thumbs';
 import { EditorSession, useAppStore } from '@/state/useAppStore';
 
 type PanelTab = 'adjust' | 'presets' | 'ai';
@@ -80,15 +97,20 @@ function EditorBody({ asset }: { asset: Asset }) {
   const resetSession = useAppStore((s) => s.resetSession);
   const applyPreset = useAppStore((s) => s.applyPreset);
   const setLut = useAppStore((s) => s.setLut);
+  const setCurves = useAppStore((s) => s.setCurves);
   const setSessionParams = useAppStore((s) => s.setSessionParams);
   const restoreSession = useAppStore((s) => s.restoreSession);
   const resetParams = useAppStore((s) => s.resetParams);
   const markStatus = useAppStore((s) => s.markStatus);
+  const copyGrade = useAppStore((s) => s.copyGrade);
+  const pasteGrade = useAppStore((s) => s.pasteGrade);
+  const clipboard = useAppStore((s) => s.clipboard);
   const settings = useAppStore((s) => s.settings);
   const apiKey = useAppStore((s) => s.apiKey);
   const notify = useAppStore((s) => s.notify);
 
   const params: EditParams = session?.params ?? DEFAULT_PARAMS;
+  const curves: CurveSet = session?.curves ?? IDENTITY_CURVE_SET;
 
   // 拖动滑块时节流写 store：画面仍跟手，但重渲染次数降一个量级
   const patchParamThrottled = useThrottledCallback((key: ParamKey, value: number) => {
@@ -96,7 +118,8 @@ function EditorBody({ asset }: { asset: Asset }) {
   }, 40);
 
   const [tab, setTab] = useState<PanelTab>('adjust');
-  const [group, setGroup] = useState<(typeof GROUPS)[number]['key']>('light');
+  const [group, setGroup] = useState<GroupKey>('light');
+  const [curveChannel, setCurveChannel] = useState<CurveChannel>('rgb');
   const [image, setImage] = useState<SkImage | null>(null);
   const [loadingImage, setLoadingImage] = useState(true);
   const [imageError, setImageError] = useState<string | null>(null);
@@ -104,6 +127,8 @@ function EditorBody({ asset }: { asset: Asset }) {
   const [comparing, setComparing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [histogram, setHistogram] = useState<Histogram | null>(null);
+  /** 预览图文件路径（按住对比时用它，避免再解一次 24MP 原图） */
+  const [previewSource, setPreviewSource] = useState<string | null>(null);
 
   /** 撤销/重做：只在"一次操作结束"（松手、应用预设、换 LUT）时入栈 */
   const historyRef = useRef<EditorSession[]>([]);
@@ -115,6 +140,8 @@ function EditorBody({ asset }: { asset: Asset }) {
   const activeLut = session?.lutPath ? lut : null;
   const lutImage = useMemo(() => lutSkImage(activeLut), [activeLut]);
   const placeholder = useMemo(() => placeholderLutImage(), []);
+  const curveImage = useMemo(() => curveSkImage(curves), [curves]);
+  const curvePlaceholder = useMemo(() => placeholderCurveImage(), []);
   /**
    * LUT 纹理的像素尺寸。ImageShader 的 rect 必须等于纹理尺寸（1 canvas 单位 = 1 像素），
    * 否则 shader 里 lut.eval(px) 的取样坐标会整体错位 —— 典型症状是"套了 LUT 但画面几乎不变"。
@@ -124,21 +151,30 @@ function EditorBody({ asset }: { asset: Asset }) {
     return { x: 0, y: 0, width: size, height: size * size };
   }, [activeLut]);
 
-  /* ---------- 载入原图（与导出同一条解码路径，保证一致） ---------- */
+  /* ---------- 载入预览图（编辑页秒开的关键） ---------- */
   useEffect(() => {
     let alive = true;
+    const assetId = asset.id;
+    const assetUri = asset.uri;
+    const assetPreviewUri = asset.previewUri;
     // 同步 setState 会造成连锁渲染：这里只在异步回调里改状态，
     // 初始的 "加载中/无错误" 由 useState 初值负责。
     (async () => {
       try {
         const { File } = await import('expo-file-system');
-        const bytes = await new File(asset.uri).bytes();
+        // 优先用入库时生成的 1600px 预览图：文件小、解码量小，
+        // 24MP 原图只在导出时重新解一次（与导出走不同路径，互不影响）。
+        const cached = existingPreview({ id: assetId, previewUri: assetPreviewUri });
+        const uri =
+          cached ?? (await ensurePreview({ id: assetId, uri: assetUri, previewUri: assetPreviewUri })) ?? assetUri;
+        const bytes = await new File(uri).bytes();
         const decoded = decodeImage(bytes);
         if (!alive) return;
         if (!decoded) throw new Error('解码失败');
-        // 预览只用降采样副本：24MP 原图整张进 GPU 纹理在低端机上会直接 OOM
-        const preview = makePreviewImage(decoded);
+        // 没有预览图时（老数据第一次打开）才在线降采样，下一次就命中缓存了
+        const preview = uri === assetUri ? makePreviewImage(decoded) : decoded;
         setImage(preview);
+        setPreviewSource(uri);
         setHistogram(computeHistogram(preview));
         setImageError(null);
       } catch (error) {
@@ -151,7 +187,7 @@ function EditorBody({ asset }: { asset: Asset }) {
     return () => {
       alive = false;
     };
-  }, [asset.uri]);
+  }, [asset.id, asset.previewUri, asset.uri]);
 
   /* ---------- 载入会话里的 LUT ---------- */
   useEffect(() => {
@@ -168,6 +204,8 @@ function EditorBody({ asset }: { asset: Asset }) {
   /* ---------- 预览区域尺寸：按原图比例放进可用空间 ---------- */
   const panelHeight = Math.min(winH * 0.46, 380);
   const stageHeight = Math.max(160, winH - insets.top - insets.bottom - panelHeight - 96);
+  /** 曲线画布高度跟着面板走：小屏上别把「保存到相册」挤出可视区 */
+  const curveHeight = Math.max(92, Math.min(138, panelHeight - 210));
   const frame = useMemo(() => {
     const imgW = image?.width() ?? asset.width;
     const imgH = image?.height() ?? asset.height;
@@ -175,32 +213,48 @@ function EditorBody({ asset }: { asset: Asset }) {
     return { width: Math.max(1, imgW * scale), height: Math.max(1, imgH * scale) };
   }, [image, asset.width, asset.height, winW, stageHeight]);
 
+  const curvesActive = useMemo(() => !isIdentityCurveSet(curves), [curves]);
+
   const uniforms = useMemo(
-    () => uniformsObject(params, frame.width, frame.height, activeLut?.size ?? 2, Boolean(activeLut)),
-    [params, frame.width, frame.height, activeLut],
+    () =>
+      uniformsObject(
+        params,
+        frame.width,
+        frame.height,
+        activeLut?.size ?? 2,
+        Boolean(activeLut),
+        curvesActive,
+      ),
+    [params, frame.width, frame.height, activeLut, curvesActive],
   );
 
   /* ---------- 撤销 / 重做 ---------- */
-  const currentSnapshot: EditorSession = useMemo(
-    () => ({
-      params,
-      presetId: session?.presetId ?? null,
-      lutPath: session?.lutPath ?? null,
-      lutName: session?.lutName ?? null,
-    }),
-    [params, session?.presetId, session?.lutPath, session?.lutName],
-  );
-
+  /**
+   * 入栈时不要用渲染闭包里的 params —— 那是"上一次渲染"的快照。
+   * 直接读 store：applyPreset / pasteGrade 这类"先改状态再提交"的动作，
+   * 同步读到的才是操作后的结果（否则按一次预设，撤销栈里少了这一步）。
+   */
   const commitHistory = useCallback(() => {
+    const latest = useAppStore.getState().sessions[asset.id];
+    const snapshot: EditorSession = latest
+      ? {
+          params: { ...latest.params },
+          curves: latest.curves,
+          presetId: latest.presetId,
+          lutPath: latest.lutPath,
+          lutName: latest.lutName,
+        }
+      : { params: { ...DEFAULT_PARAMS }, curves: IDENTITY_CURVE_SET, presetId: 'original', lutPath: null, lutName: null };
+
     const entries = historyRef.current.slice(0, historyIndex + 1);
     const last = entries[entries.length - 1];
-    if (last && JSON.stringify(last) === JSON.stringify(currentSnapshot)) return;
-    entries.push(currentSnapshot);
+    if (last && JSON.stringify(last) === JSON.stringify(snapshot)) return;
+    entries.push(snapshot);
     if (entries.length > 40) entries.shift();
     historyRef.current = entries;
     setHistoryLength(entries.length);
     setHistoryIndex(entries.length - 1);
-  }, [currentSnapshot, historyIndex]);
+  }, [asset.id, historyIndex]);
 
   const undo = useCallback(() => {
     if (historyIndex <= 0) return;
@@ -221,10 +275,8 @@ function EditorBody({ asset }: { asset: Asset }) {
   // 首次进入把当前状态作为历史第 0 项
   useEffect(() => {
     if (historyRef.current.length > 0) return;
-    historyRef.current = [currentSnapshot];
-    setHistoryLength(1);
-    setHistoryIndex(0);
-  }, [currentSnapshot]);
+    commitHistory();
+  }, [commitHistory]);
 
   /* ---------- 保存 / 导出 ---------- */
   const handleSave = useCallback(
@@ -235,6 +287,7 @@ function EditorBody({ asset }: { asset: Asset }) {
         const result = await exportEdited({
           asset,
           params,
+          curves,
           lut: activeLut,
           longEdge: settings.exportLongEdge,
           quality: settings.jpegQuality,
@@ -265,7 +318,7 @@ function EditorBody({ asset }: { asset: Asset }) {
         setSaving(false);
       }
     },
-    [asset, activeLut, markStatus, notify, params, saving, settings.exportLongEdge, settings.jpegQuality],
+    [asset, activeLut, curves, markStatus, notify, params, saving, settings.exportLongEdge, settings.jpegQuality],
   );
 
   const pickLut = useCallback(async () => {
@@ -279,7 +332,51 @@ function EditorBody({ asset }: { asset: Asset }) {
     notify('ok', `已应用 ${result.name} · ${result.summary}`);
   }, [asset.id, notify, setLut]);
 
-  const dirty = !isNeutral(params);
+  /** 曲线拖动：与滑杆同一套节流，40ms 写一次 store */
+  const handleCurveChange = useThrottledCallback((points: CurvePoint[]) => {
+    const current = useAppStore.getState().sessions[asset.id]?.curves ?? IDENTITY_CURVE_SET;
+    setCurves(asset.id, { ...current, [curveChannel]: points });
+  }, 40);
+
+  /** 松手时用最终控制点再写一次（节流可能丢掉最后一帧），然后入历史栈 */
+  const commitCurve = useCallback(
+    (points: CurvePoint[]) => {
+      const current = useAppStore.getState().sessions[asset.id]?.curves ?? IDENTITY_CURVE_SET;
+      setCurves(asset.id, { ...current, [curveChannel]: points });
+      commitHistory();
+    },
+    [asset.id, commitHistory, curveChannel, setCurves],
+  );
+
+  /** 滑杆松手：先写最终值（不受节流影响），再入历史栈 */
+  const commitParam = useCallback(
+    (key: ParamKey, value: number) => {
+      patchParam(asset.id, key, value);
+      commitHistory();
+    },
+    [asset.id, commitHistory, patchParam],
+  );
+
+  const resetCurveChannel = useCallback(() => {
+    setCurves(asset.id, { ...curves, [curveChannel]: identityCurve() });
+    commitHistory();
+  }, [asset.id, commitHistory, curveChannel, curves, setCurves]);
+
+  const resetGroup = useCallback(() => {
+    if (group === 'curve') setCurves(asset.id, defaultCurveSet());
+    else resetParams(asset.id, GROUP_PARAMS[group]);
+    commitHistory();
+  }, [asset.id, commitHistory, group, resetParams, setCurves]);
+
+  const resetHslBand = useCallback(
+    (band: HslBandKey) => {
+      resetParams(asset.id, hslParamKeys(band));
+      commitHistory();
+    },
+    [asset.id, commitHistory, resetParams],
+  );
+
+  const dirty = !isNeutral(params) || !isIdentityCurveSet(curves) || Boolean(activeLut);
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -328,6 +425,15 @@ function EditorBody({ asset }: { asset: Asset }) {
 
       {/* 画面 */}
       <View style={[styles.stage, { height: stageHeight }]}>
+        {/* 预览图解码前先铺缩略图：点进编辑器的第一帧就不是黑的 */}
+        {!image && !imageError ? (
+          <Image
+            source={{ uri: asset.thumbUri ?? asset.uri }}
+            style={{ width: frame.width, height: frame.height, opacity: 0.45 }}
+            contentFit="cover"
+          />
+        ) : null}
+
         {image && effect ? (
           <Canvas style={{ width: frame.width, height: frame.height }}>
             <Fill>
@@ -348,6 +454,14 @@ function EditorBody({ asset }: { asset: Asset }) {
                   ty="clamp"
                   sampling={{ filter: FilterMode.Nearest }}
                 />
+                <ImageShader
+                  image={curveImage ?? curvePlaceholder}
+                  fit="fill"
+                  rect={{ x: 0, y: 0, width: 256, height: 1 }}
+                  tx="clamp"
+                  ty="clamp"
+                  sampling={{ filter: FilterMode.Linear }}
+                />
               </Shader>
             </Fill>
           </Canvas>
@@ -366,7 +480,7 @@ function EditorBody({ asset }: { asset: Asset }) {
         ) : null}
 
         {comparing ? (
-          <Image source={{ uri: asset.uri }} style={StyleSheet.absoluteFill} contentFit="contain" />
+          <Image source={{ uri: previewSource ?? asset.uri }} style={StyleSheet.absoluteFill} contentFit="contain" />
         ) : null}
 
         <HistogramOverlay histogram={histogram} />
@@ -399,18 +513,23 @@ function EditorBody({ asset }: { asset: Asset }) {
         {tab === 'adjust' ? (
           <AdjustPanel
             params={params}
+            curves={curves}
             group={group}
             setGroup={setGroup}
+            curveChannel={curveChannel}
+            setCurveChannel={setCurveChannel}
+            curveHeight={curveHeight}
             patchParam={patchParamThrottled}
-            onCommit={commitHistory}
-            onResetGroup={() => {
-              resetParams(asset.id, GROUP_PARAMS[group]);
-              commitHistory();
-            }}
+            onPatchCommit={commitParam}
+            onCurveChange={handleCurveChange}
+            onCurveCommit={commitCurve}
+            onResetGroup={resetGroup}
             onResetParam={(key) => {
               resetParams(asset.id, [key]);
               commitHistory();
             }}
+            onResetBand={resetHslBand}
+            onResetCurve={resetCurveChannel}
           />
         ) : null}
 
@@ -427,6 +546,14 @@ function EditorBody({ asset }: { asset: Asset }) {
               setLut(asset.id, null);
               setLutState(null);
             }}
+            onCopyGrade={() => {
+              copyGrade(asset.id);
+            }}
+            onPasteGrade={() => {
+              pasteGrade([asset.id]);
+              commitHistory();
+            }}
+            clipboardName={clipboard?.sourceName ?? null}
           />
         ) : null}
 
@@ -471,51 +598,104 @@ function EditorBody({ asset }: { asset: Asset }) {
 
 function AdjustPanel({
   params,
+  curves,
   group,
   setGroup,
+  curveChannel,
+  setCurveChannel,
+  curveHeight,
   patchParam,
-  onCommit,
+  onPatchCommit,
+  onCurveChange,
+  onCurveCommit,
   onResetGroup,
   onResetParam,
+  onResetBand,
+  onResetCurve,
 }: {
   params: EditParams;
-  group: (typeof GROUPS)[number]['key'];
-  setGroup: (g: (typeof GROUPS)[number]['key']) => void;
+  curves: CurveSet;
+  group: GroupKey;
+  setGroup: (g: GroupKey) => void;
+  curveChannel: CurveChannel;
+  setCurveChannel: (channel: CurveChannel) => void;
+  curveHeight: number;
   patchParam: (key: ParamKey, value: number) => void;
-  onCommit: () => void;
+  onPatchCommit: (key: ParamKey, value: number) => void;
+  onCurveChange: (points: CurvePoint[]) => void;
+  onCurveCommit: (points: CurvePoint[]) => void;
   onResetGroup: () => void;
   onResetParam: (key: ParamKey) => void;
+  onResetBand: (band: HslBandKey) => void;
+  onResetCurve: () => void;
 }) {
+  const keys = GROUP_PARAMS[group];
   return (
-    <View style={{ flex: 1, marginTop: space.md }}>
-      <Segmented value={group} onChange={(v) => setGroup(v as typeof group)} options={GROUPS.map((g) => ({ value: g.key, label: g.label }))} />
-      <View style={styles.groupBar}>
-        <T variant="monoMuted">{GROUP_PARAMS[group].length} 项</T>
-        <Pressable onPress={onResetGroup} hitSlop={8}>
-          <T variant="monoMuted" style={{ color: color.textMuted }}>
-            重置本组
-          </T>
-        </Pressable>
-      </View>
-      <ScrollView style={{ flex: 1, marginTop: space.xs }} showsVerticalScrollIndicator={false}>
-        {GROUP_PARAMS[group].map((key) => (
-          <ParamRow
-            key={key}
-            label={PARAM_META[key].label}
-            value={params[key]}
-            min={PARAM_META[key].min}
-            max={PARAM_META[key].max}
-            step={PARAM_META[key].step}
-            onChange={(v) => patchParam(key, v)}
-            onCommit={onCommit}
-            onReset={() => onResetParam(key)}
+    <View style={{ flex: 1, marginTop: space.sm }}>
+      <TabStrip value={group} onChange={setGroup} options={GROUPS.map((g) => ({ value: g.key, label: g.label }))} />
+
+      {group === 'hsl' ? (
+        <HslPanel params={params} onPatch={patchParam} onPatchCommit={onPatchCommit} onResetBand={onResetBand} />
+      ) : group === 'curve' ? (
+        <View style={{ flex: 1, marginTop: space.md }}>
+          <Segmented
+            value={curveChannel}
+            onChange={(value) => setCurveChannel(value as CurveChannel)}
+            options={[
+              { value: 'rgb', label: 'RGB' },
+              { value: 'r', label: 'R' },
+              { value: 'g', label: 'G' },
+              { value: 'b', label: 'B' },
+            ]}
           />
-        ))}
-        <T variant="monoMuted" style={{ marginTop: space.sm }}>
-          {PARAM_META[GROUP_PARAMS[group][0]].hint}
-        </T>
-        <View style={{ height: space.lg }} />
-      </ScrollView>
+          <View style={{ marginTop: space.md }}>
+            <CurveEditor
+              points={curves[curveChannel]}
+              height={curveHeight}
+              onChange={onCurveChange}
+              onCommit={onCurveCommit}
+            />
+          </View>
+          <View style={styles.groupBar}>
+            <T variant="monoMuted">拖点调整 · 点空白处加点</T>
+            <Pressable onPress={onResetCurve} hitSlop={8}>
+              <T variant="monoMuted" style={{ color: color.textMuted }}>
+                重置
+              </T>
+            </Pressable>
+          </View>
+        </View>
+      ) : (
+        <>
+          <View style={styles.groupBar}>
+            <T variant="monoMuted">{keys.length} 项</T>
+            <Pressable onPress={onResetGroup} hitSlop={8}>
+              <T variant="monoMuted" style={{ color: color.textMuted }}>
+                重置本组
+              </T>
+            </Pressable>
+          </View>
+          <ScrollView style={{ flex: 1, marginTop: space.xs }} showsVerticalScrollIndicator={false}>
+            {keys.map((key) => (
+              <ParamRow
+                key={key}
+                label={PARAM_META[key].label}
+                value={params[key]}
+                min={PARAM_META[key].min}
+                max={PARAM_META[key].max}
+                step={PARAM_META[key].step}
+                onChange={(v) => patchParam(key, v)}
+                onCommit={(v) => onPatchCommit(key, v)}
+                onReset={() => onResetParam(key)}
+              />
+            ))}
+            <T variant="monoMuted" style={{ marginTop: space.sm }}>
+              {PARAM_META[keys[0]].hint}
+            </T>
+            <View style={{ height: space.lg }} />
+          </ScrollView>
+        </>
+      )}
     </View>
   );
 }
@@ -526,12 +706,18 @@ function PresetsPanel({
   onPickLut,
   onClearLut,
   lutName,
+  onCopyGrade,
+  onPasteGrade,
+  clipboardName,
 }: {
   activeId: string | null;
   onApply: (id: string) => void;
   onPickLut: () => void;
   onClearLut: () => void;
   lutName: string | null;
+  onCopyGrade: () => void;
+  onPasteGrade: () => void;
+  clipboardName: string | null;
 }) {
   const presets = useAppStore((s) => s.presets);
   return (
@@ -564,6 +750,26 @@ function PresetsPanel({
         </View>
         <T variant="monoMuted" style={{ marginTop: space.sm }}>
           {lutName ?? '支持 3D .cube（17/32/33/64）；导入后会按 LUT 浓度与原图混合。'}
+        </T>
+      </View>
+
+      <View style={{ marginTop: space.lg }}>
+        <Label>批量与复用</Label>
+        <View style={{ flexDirection: 'row', gap: space.sm, marginTop: space.sm }}>
+          <Button title="复制调色" onPress={onCopyGrade} variant="secondary" style={{ flex: 1 }} icon="copy-outline" />
+          <Button
+            title="粘贴调色"
+            onPress={onPasteGrade}
+            variant="secondary"
+            disabled={!clipboardName}
+            style={{ flex: 1 }}
+            icon="clipboard-outline"
+          />
+        </View>
+        <T variant="monoMuted" style={{ marginTop: space.sm }}>
+          {clipboardName
+            ? `剪贴板：${clipboardName}（图库多选后可批量粘贴）`
+            : '复制这套调色后，可粘贴到本张或图库里多选的一批照片'}
         </T>
       </View>
       <View style={{ height: space.lg }} />

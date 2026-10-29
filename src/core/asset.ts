@@ -11,6 +11,8 @@ export interface Asset {
   uri: string;
   /** 缩略图 uri（可缺省，缺省时直接用原图） */
   thumbUri?: string;
+  /** 编辑预览图 uri（1600px，可缺省；缺省时编辑器回落到原图） */
+  previewUri?: string;
   capturedAt: number;
   width: number;
   height: number;

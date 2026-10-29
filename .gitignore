@@ -8,6 +8,8 @@ node_modules/
 dist/
 web-build/
 expo-env.d.ts
+# expo export 的临时产物（只用于本地验证打包）
+.export-check/
 
 # Native
 .kotlin/

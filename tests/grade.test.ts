@@ -15,30 +15,32 @@ const MID: [number, number, number] = [0.5, 0.5, 0.5];
 const WARM_PIXEL: [number, number, number] = [0.72, 0.5, 0.34];
 
 describe('uniform 排列（参数串位 = 静默错色的根源）', () => {
-  it('扁平数组：前 4 个固定，其余按 PARAM_KEYS 顺序', () => {
-    const values = uniformsFor(DEFAULT_PARAMS, 1200, 800, 33, true);
-    expect(values).toHaveLength(4 + PARAM_KEYS.length);
-    expect(values.slice(0, 4)).toEqual([1200, 800, 33, 1]);
-    expect(values.slice(4)).toEqual(PARAM_KEYS.map((k) => DEFAULT_PARAMS[k]));
+  it('扁平数组：前 5 个固定，其余按 PARAM_KEYS 顺序', () => {
+    const values = uniformsFor(DEFAULT_PARAMS, 1200, 800, 33, true, true);
+    expect(values).toHaveLength(5 + PARAM_KEYS.length);
+    expect(values.slice(0, 5)).toEqual([1200, 800, 33, 1, 1]);
+    expect(values.slice(5)).toEqual(PARAM_KEYS.map((k) => DEFAULT_PARAMS[k]));
   });
 
-  it('lutSize 下限为 2，hasLut 归一为 0/1', () => {
+  it('lutSize 下限为 2，hasLut / hasCurve 归一为 0/1', () => {
     const values = uniformsFor(DEFAULT_PARAMS, 10, 10, 1, false);
     expect(values[2]).toBe(2);
     expect(values[3]).toBe(0);
+    expect(values[4]).toBe(0);
   });
 
   it('命名版与扁平版一致', () => {
     const params = base({ temperature: 24, grain: 9 });
-    const object = uniformsObject(params, 300, 200, 17, true);
+    const object = uniformsObject(params, 300, 200, 17, true, true);
     expect(object.srcSize).toEqual([300, 200]);
     expect(object.lutSize).toBe(17);
     expect(object.hasLut).toBe(1);
+    expect(object.hasCurve).toBe(1);
     expect(object.temperature).toBe(24);
     expect(object.grain).toBe(9);
-    const flat = uniformsFor(params, 300, 200, 17, true);
-    expect(flat[4 + PARAM_KEYS.indexOf('temperature')]).toBe(24);
-    expect(flat[4 + PARAM_KEYS.indexOf('grain')]).toBe(9);
+    const flat = uniformsFor(params, 300, 200, 17, true, true);
+    expect(flat[5 + PARAM_KEYS.indexOf('temperature')]).toBe(24);
+    expect(flat[5 + PARAM_KEYS.indexOf('grain')]).toBe(9);
   });
 });
 
@@ -142,15 +144,35 @@ describe('参数语义（CPU 参考实现，与 SKSL 同一套公式）', () => 
 
   it('输出永远在 0..1 且无 NaN（极端参数）', () => {
     const extremes: EditParams = {
+      ...DEFAULT_PARAMS,
       brightness: 100,
       contrast: 100,
       saturation: 100,
+      vibrance: 100,
+      hue: 180,
       temperature: 100,
       tint: -100,
       highlights: 100,
       shadows: 100,
+      whites: 100,
+      blacks: -100,
+      fade: 100,
+      dehaze: 100,
+      splitShadowHue: 200,
+      splitShadowSat: 100,
+      splitHighlightHue: 40,
+      splitHighlightSat: 100,
+      redHue: 100,
+      orangeHue: -100,
+      yellowSat: 100,
+      greenLum: -100,
+      aquaHue: 100,
+      blueSat: -100,
+      purpleLum: 100,
+      magentaHue: -100,
       sharpen: 100,
       clarity: 100,
+      noiseReduction: 100,
       grain: 100,
       vignette: 100,
       lutStrength: 100,
@@ -167,5 +189,64 @@ describe('参数语义（CPU 参考实现，与 SKSL 同一套公式）', () => 
     expect(clamp01(-1)).toBe(0);
     expect(clamp01(2)).toBe(1);
     expect(clamp01(0.42)).toBe(0.42);
+  });
+});
+
+describe('新增面板的语义（自然饱和 / 色相 / 黑白场 / 褪色 / 分离色调 / HSL）', () => {
+  const chroma = ([r, g, b]: [number, number, number]) => Math.max(r, g, b) - Math.min(r, g, b);
+
+  it('自然饱和：对低饱和像素的提升大于高饱和像素', () => {
+    const params = base({ vibrance: 80 });
+    const low = chroma(gradePixelReference([0.55, 0.5, 0.46], params));
+    const lowBefore = chroma([0.55, 0.5, 0.46]);
+    const high = chroma(gradePixelReference([0.85, 0.15, 0.15], params));
+    const highBefore = chroma([0.85, 0.15, 0.15]);
+    expect(low - lowBefore).toBeGreaterThan(high - highBefore);
+  });
+
+  it('色相 +120° 把红色转到绿色', () => {
+    const out = gradePixelReference([0.8, 0.12, 0.12], base({ hue: 120 }));
+    expect(out[1]).toBeGreaterThan(out[0]);
+  });
+
+  it('黑场 + 提亮暗部，黑场 - 压实暗部', () => {
+    const lifted = gradePixelReference([0.06, 0.06, 0.06], base({ blacks: 100 }))[0];
+    const crushed = gradePixelReference([0.2, 0.2, 0.2], base({ blacks: -100 }))[0];
+    expect(lifted).toBeGreaterThan(0.06);
+    expect(crushed).toBeLessThan(0.2);
+  });
+
+  it('白场 + 把接近白的地方推得更白', () => {
+    const before = 0.86;
+    const after = gradePixelReference([before, before, before], base({ whites: 100 }))[0];
+    expect(after).toBeGreaterThan(before);
+  });
+
+  it('褪色抬高黑位（哑光），但不会把整张图压暗', () => {
+    const before = 0.03;
+    const black = gradePixelReference([before, before, before], base({ fade: 100 }))[0];
+    const white = gradePixelReference([0.9, 0.9, 0.9], base({ fade: 100 }))[0];
+    expect(black).toBeGreaterThan(before + 0.05);
+    expect(white).toBeGreaterThan(0.8);
+  });
+
+  it('分离色调：阴影偏蓝、高光偏暖', () => {
+    const shadow = gradePixelReference(
+      [0.18, 0.18, 0.18],
+      base({ splitShadowHue: 210, splitShadowSat: 100 }),
+    );
+    expect(shadow[2]).toBeGreaterThan(shadow[0]);
+    const highlight = gradePixelReference(
+      [0.88, 0.88, 0.88],
+      base({ splitHighlightHue: 40, splitHighlightSat: 100 }),
+    );
+    expect(highlight[0]).toBeGreaterThan(highlight[2]);
+  });
+
+  it('HSL 红色带降饱和只影响红色像素', () => {
+    const red = gradePixelReference([0.8, 0.15, 0.15], base({ redSat: -100 }));
+    expect(chroma(red)).toBeLessThan(0.2);
+    const blue = gradePixelReference([0.15, 0.15, 0.8], base({ redSat: -100 }));
+    expect(chroma(blue)).toBeGreaterThan(0.4);
   });
 });
