@@ -126,6 +126,65 @@ class SonyPropertyArrayTest {
     assertEquals(SonyVendorCodes(), parseSonyVendorCodes(bytes.toByteArray()))
   }
 
+  @Test
+  fun treatsTheNextPropertyCodeAsNotASecondEnumerationList() {
+    // The real ILCE-7M2 payload packs one enumeration list per record, and the next record's
+    // property code (0xD215) follows immediately. Reading it as "supported values count" made
+    // the whole 1118-byte array parse into zero properties, so D215 was never readable.
+    val blob = blobOf(
+      singleEnumListRecord(0x5004, DATATYPE_UINT8, currentValue = 16, values = longArrayOf(2, 3, 4)),
+      record(0xD215, DATATYPE_UINT16, factory = 0, currentValue = 0x8001),
+    )
+
+    val scan = SonyPtpProperties.scan(blob)
+
+    assertEquals(null, scan.failure)
+    assertEquals(2, scan.parsed.size)
+    assertEquals(0x8001L, SonyPtpProperties.scalar(scan.parsed, 0xD215))
+  }
+
+  @Test
+  fun stillReadsASecondEnumerationListWhenPresent() {
+    // Newer bodies append a second list. A small number there (< 0x0200) is a count, not a code.
+    val blob = blobOf(
+      singleEnumListRecord(0x5004, DATATYPE_UINT8, currentValue = 16, values = longArrayOf(2, 3, 4), secondList = longArrayOf(2, 3)),
+      record(0xD215, DATATYPE_UINT16, factory = 0, currentValue = 0x0000),
+    )
+
+    val scan = SonyPtpProperties.scan(blob)
+
+    assertEquals(null, scan.failure)
+    assertEquals(2, scan.parsed.size)
+    assertEquals(listOf<Any?>(2L, 3L), scan.parsed[0].supportedValues)
+    assertEquals(0L, SonyPtpProperties.scalar(scan.parsed, 0xD215))
+  }
+
+  private fun singleEnumListRecord(
+    code: Int,
+    dataType: Int,
+    currentValue: Long,
+    values: LongArray,
+    secondList: LongArray? = null,
+  ): ByteArray {
+    val out = ByteArrayOutputStream()
+    writeU16(out, code)
+    writeU16(out, dataType)
+    out.write(0)
+    out.write(1)
+    writeValue(out, dataType, 0)
+    writeValue(out, dataType, currentValue)
+    out.write(FORM_ENUMERATION)
+    writeU16(out, values.size)
+    values.forEach { writeValue(out, dataType, it) }
+    if (secondList != null) {
+      writeU16(out, secondList.size)
+      secondList.forEach { writeValue(out, dataType, it) }
+    }
+    return out.toByteArray()
+  }
+
+
+
   private fun blobOf(vararg records: ByteArray): ByteArray = blobDeclaring(records.size, *records)
 
   private fun blobDeclaring(declaredCount: Int, vararg records: ByteArray): ByteArray {

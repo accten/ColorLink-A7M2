@@ -151,9 +151,15 @@ internal object SonyPtpProperties {
       }
       FORM_ENUMERATION -> {
         settableValues = reader.valueList(dataType)
-        // Sony emits a second list. It is absent on some firmware, so a clean end of
-        // payload here is a complete record rather than a parse failure.
-        supportedValues = if (reader.remaining() >= 2) reader.valueList(dataType) else emptyList()
+        // 少数新机型会在枚举列表后面再跟一份"支持列表"。判断依据是参考实现的规则：
+        // 接下来的 UINT16 必须**像一个数量**（< 0x0200），否则它就是下一条记录的属性码
+        // （0x5xxx / 0xDxxx）。用"还有 2 字节就再读一份"会把下一条记录的属性码当成数量，
+        // 于是整包从第一条枚举记录之后就全错位 —— A7M2 的 1118 字节属性数组正是这样被读空的。
+        supportedValues = if (reader.remaining() >= 2 && reader.peekU16() < MAX_ENUMERATION_COUNT) {
+          reader.valueList(dataType)
+        } else {
+          emptyList()
+        }
       }
     }
 
@@ -176,6 +182,9 @@ internal object SonyPtpProperties {
 
   private const val FORM_RANGE = 0x01
   private const val FORM_ENUMERATION = 0x02
+
+  /** 枚举值的数量上限：再大就不是"数量"，而是下一条记录的属性码 */
+  private const val MAX_ENUMERATION_COUNT = 0x0200
 
   /** Reads a `UINT16` count followed by that many DataType-sized values. */
   private fun SonyPtpReader.valueList(dataType: Int): List<Any?> {
@@ -247,6 +256,12 @@ internal class SonyPtpReader(private val data: ByteArray, private var offset: In
 
   fun u16(): Int = read(2) {
     (data[it].toInt() and 0xFF) or ((data[it + 1].toInt() and 0xFF) shl 8)
+  }
+
+  /** Read the next UINT16 without consuming it: used to tell a list count from the next code. */
+  fun peekU16(): Int {
+    if (offset + 2 > data.size) throw SonyPtpParseException("PTP payload ended after $offset of ${data.size} bytes.")
+    return (data[offset].toInt() and 0xFF) or ((data[offset + 1].toInt() and 0xFF) shl 8)
   }
 
   fun u32(): Long = read(4) {

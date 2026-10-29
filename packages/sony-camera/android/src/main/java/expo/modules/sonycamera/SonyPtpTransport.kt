@@ -81,6 +81,9 @@ internal class SonyPtpTransport private constructor(
 
     /** 一条事务里 bulk-IN 连续失败几次就放弃（属性读取只用 1 次，别为它等 25 秒） */
     private const val MAX_READ_RETRIES = 5
+
+    /** 分块读取的窗口大小：0x101B 一次要 256KB，够 24MP JPEG 分若干次读完 */
+    private const val PARTIAL_READ_CHUNK = 0x40000
     private const val USB_TIMEOUT_MS = 5_000
 
 
@@ -543,10 +546,28 @@ internal class SonyPtpTransport private constructor(
   /**
    * 取回整个对象，但不假设它是 JPEG。
    *
-   * JPEG 走 [SonyPtpCodec.parseSonyJpegData] 剥掉 Sony 的包裹头；RAW(ARW) 是 TIFF 容器，
-   * 一个 `FF D8` 都没有，旧逻辑会把它当成"没取到"直接丢掉。
+   * 真机实测（ILCE-7M2，D215 刚变成 0x8001 的那一瞬间）：
+   * 直接 `0x1009(0xFFFFC001)` 回 `0x2001 + 0 字节`，紧接着相机就推 `0xC202 ObjectRemoved` ——
+   * 也就是说"读到了、但一个字节都没给"。参考实现里有一步我们之前跳过了：
+   *
+   *   ptp_getobjectinfo(newobject)   ← 0x1008，先问大小/格式
+   *   ptp_getobject(newobject)       ← 0x1009，整读
+   *
+   * 现在按这个顺序来；`0x1008` 只做一次重试（真机以前在对象不存在时它会挂住），
+   * 失败也不影响后面整读。整读仍然空的话，再退到分块读（0x101B / Sony 0x923D）。
    */
   private fun getObjectPayload(handle: Int): ByteArray? {
+    val info = runCatching { readObjectInfo(handle) }.getOrNull()
+    if (info != null) {
+      trace(
+        "object info handle=${"%08X".format(handle)} format=0x%04X bytes=%d name=%s".format(
+          info.format,
+          info.size,
+          info.name,
+        ),
+      )
+    }
+
     val result = execute(
       0x1009,
       intArrayOf(handle),
@@ -558,13 +579,58 @@ internal class SonyPtpTransport private constructor(
         RESPONSE_ACCESS_DENIED,
       ),
     )
-    if (result.responseCode != RESPONSE_OK) {
-      trace("getObject handle=${"%08X".format(handle)} code=${result.responseCode.hex()}")
-      return null
+    val data = result.data
+    trace("getObject 0x1009 handle=${"%08X".format(handle)} code=${result.responseCode.hex()} bytes=${data?.size ?: 0}")
+    if (result.responseCode == RESPONSE_OK && data != null && data.isNotEmpty()) {
+      return SonyPtpCodec.extractSonyObjectPayload(data)
     }
+
+    // 整读没数据：这台机身可能只认分块读。标准 0x101B 在它的操作表里。
+    val partial = runCatching {
+      execute(
+        0x101B,
+        intArrayOf(handle, 0, PARTIAL_READ_CHUNK),
+        expectsData = true,
+        allowBusy = true,
+        acceptedResponses = setOf(RESPONSE_OK, RESPONSE_INVALID_HANDLE, RESPONSE_DEVICE_BUSY, RESPONSE_ACCESS_DENIED),
+      )
+    }.getOrNull()
+    if (partial != null) {
+      val bytes = partial.data
+      trace("getObject 0x101B handle=${"%08X".format(handle)} code=${partial.responseCode.hex()} bytes=${bytes?.size ?: 0}")
+      if (partial.responseCode == RESPONSE_OK && bytes != null && bytes.isNotEmpty()) {
+        return SonyPtpCodec.extractSonyObjectPayload(bytes)
+      }
+    }
+    return null
+  }
+
+  /** `0x1008 GetObjectInfo`：拿到对象大小与格式（诊断 + 让机身准备数据段）。 */
+  private fun readObjectInfo(handle: Int): SonyObjectInfo? {
+    val result = execute(
+      0x1008,
+      intArrayOf(handle),
+      expectsData = true,
+      maxReadRetries = 1,
+      acceptedResponses = setOf(RESPONSE_OK, RESPONSE_INVALID_HANDLE, RESPONSE_DEVICE_BUSY, RESPONSE_ACCESS_DENIED),
+    )
     val data = result.data ?: return null
-    if (data.isEmpty()) return null
-    return SonyPtpCodec.extractSonyObjectPayload(data)
+    if (result.responseCode != RESPONSE_OK || data.size < 52) return null
+    // PTPObjectInfo: storage(4) format(2) protection(2) compressedSize(4) ... filename at 52
+    val format = data.u16(4)
+    val size = data.u32(8).toInt()
+    val name = runCatching {
+      var cursor = 52
+      if (cursor >= data.size) return@runCatching ""
+      val characters = data[cursor].toInt() and 0xFF
+      cursor += 1
+      if (characters == 0) return@runCatching ""
+      val end = minOf(data.size, cursor + characters * 2)
+      String(data.copyOfRange(cursor, end), Charsets.UTF_16LE).trimEnd('\u0000')
+    }.getOrDefault("")
+    return SonyObjectInfo(size = size, format = format, name = name)
+  }
+
   }
 
   fun prepareLiveView() {
@@ -1075,6 +1141,9 @@ private fun clearEndpointHalt(
 }
 
 private data class PtpContainer(val type: Int, val code: Int, val transactionId: Int, val payload: ByteArray)
+
+/** What `0x1008 GetObjectInfo` reports about the object waiting on a virtual handle. */
+private data class SonyObjectInfo(val size: Int, val format: Int, val name: String)
 private data class PtpResult(val data: ByteArray?, val responseCode: Int)
 
 
