@@ -401,9 +401,6 @@ internal class SonyCameraController(private val context: Context) {
             if (activeScalar != null) {
               activeScalar.startLiveView()
             } else {
-              // 先让相机开始产帧（D221=1）：不写这一条时相机给一两帧就不再更新虚拟句柄，
-              // 界面表现为"取景黑屏"。写入失败不致命，随后照样尝试读帧。
-              activeTransport?.setLiveViewActive(true)
               activeTransport?.prepareLiveView()
             }
             liveViewPrepared = true

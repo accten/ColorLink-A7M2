@@ -84,6 +84,9 @@ internal class SonyPtpTransport private constructor(
 
     /** 分块读取的窗口大小：0x101B 一次要 256KB，够 24MP JPEG 分若干次读完 */
     private const val PARTIAL_READ_CHUNK = 0x40000
+
+    /** 写 D221=1 之后等相机切换完再读帧（真机不等的话第一条 0x1009 会一直不回包） */
+    private const val LIVE_VIEW_RESTART_SETTLE_MS = 600L
     private const val USB_TIMEOUT_MS = 5_000
 
 
@@ -650,9 +653,20 @@ internal class SonyPtpTransport private constructor(
   }
 
   fun prepareLiveView() {
-    // 参考实现的取景路径：直接 GetObject(0x1009) @ 0xFFFFC002，没有 D221 门禁。
+    // 先按参考实现的最短路径试：直接 GetObject(0x1009) @ 0xFFFFC002。
+    // 这台机身在相机已经"醒着推流"时一下就能成（手机实测 10fps 走的就是这条）。
     if (getObjectDirect(HANDLE_LIVE_VIEW) != null) {
       trace("live-view ready via GetObject(0x1009) on 0xFFFFC002")
+      return
+    }
+
+    // 不成再请相机开始推流（D221=1）。真机上出现过"只来一两帧然后不再更新虚拟句柄"，
+    // 写这条属性后才持续出帧；但它会让相机切一次内部状态，所以**不能**紧跟着读帧，
+    // 否则第一条 0x1009 会一直不回包（实测 5s×3 次超时）。
+    setLiveViewActive(true)
+    SystemClock.sleep(LIVE_VIEW_RESTART_SETTLE_MS)
+    if (getObjectDirect(HANDLE_LIVE_VIEW) != null) {
+      trace("live-view ready after D221=1 restart")
       return
     }
     var lastStatus: Long? = null
