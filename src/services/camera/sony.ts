@@ -312,6 +312,26 @@ export class SonyCameraTransport implements ICameraTransport {
     }
   }
 
+  /**
+   * 照片保存位置（相机 `0xD222`）。
+   *
+   * 未联机时只记住值：原生控制器会在下次联机时应用它（默认 17）。
+   * 失败不能抛给调用方——这只是个偏好设置，不该影响已有连接。
+   */
+  async setCaptureTarget(value: number): Promise<void> {
+    const native = SonyCamera;
+    if (!native?.setCaptureTarget) return;
+    try {
+      this.applyState(await native.setCaptureTarget(value));
+      eventLog.info('camera.captureTarget', { value });
+    } catch (error) {
+      eventLog.warn('camera.captureTarget.failed', {
+        value,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   async startLiveView(): Promise<void> {
     const state = await this.requireModule().startLiveView();
     this.applyState(state);

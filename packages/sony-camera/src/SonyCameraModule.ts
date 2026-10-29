@@ -35,6 +35,14 @@ declare class SonyCameraNativeModule extends NativeModule<SonyCameraModuleEvents
 
   /** 诊断：直接发一条 Sony 厂商操作（逆向取图协议用），返回码 + 原始字节 hex */
   probeVendorOp?(operation: number, params?: number[], dataHex?: string): Promise<Record<string, unknown>>;
+
+  /**
+   * 照片保存位置：写相机 `0xD222`。
+   *
+   * 合法值只有 1 / 17 / 16（相机自己的枚举），含义按机型略有差异，见 `core/captureTarget`。
+   * 已联机时立刻生效，未联机时只记住值、下次联机时应用。
+   */
+  setCaptureTarget?(value: number): Promise<SonyCameraState>;
   /** Android only, and only when the active ScalarWebAPI camera advertises coordinate focus. */
   focusAt?(x: number, y: number, viewWidth: number, viewHeight: number): Promise<SonyFocusResult>;
   getDiagnostics(): SonyDiagnosticsSnapshot;

@@ -86,6 +86,13 @@ export interface ICameraTransport {
    * 实现方必须保证失败时安静返回，绝不因此打断取景。
    */
   refreshExposure?(): Promise<void>;
+  /**
+   * 照片保存位置（相机端 `0xD222`）。
+   *
+   * 可选：只有真机传输实现得了。值见 `core/captureTarget`；
+   * 实现方要保证"未联机时只记住值、联机后应用"。
+   */
+  setCaptureTarget?(value: number): Promise<void>;
   snapshot(): CameraSnapshot;
   subscribe(listener: (snapshot: CameraSnapshot) => void): () => void;
   onPhoto(listener: (photo: CapturedPhoto) => void): () => void;

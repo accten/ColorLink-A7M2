@@ -213,6 +213,10 @@ export const useAppStore = create<AppState>((set, get) => {
       const snapshot = await next.connect();
       set({ camera: snapshot, cameraBusy: false });
       eventLog.info('camera.ready', { mode, model: snapshot.info?.model ?? 'unknown' });
+      // 联机成功后把「照片保存位置」应用到相机（未联机时原生侧只记值）
+      if (next.setCaptureTarget) {
+        void next.setCaptureTarget(get().settings.captureTarget).catch(() => {});
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       eventLog.error('camera.connect.failed', { mode, error: message });
@@ -470,6 +474,10 @@ export const useAppStore = create<AppState>((set, get) => {
       const next = { ...get().settings, ...patch };
       set({ settings: next });
       await saveSettings(next);
+      // 「照片保存位置」改了要立刻写给相机，否则要等下次联机才生效
+      if (patch.captureTarget !== undefined && transport?.setCaptureTarget) {
+        void transport.setCaptureTarget(next.captureTarget).catch(() => {});
+      }
     },
 
     saveKey: async (key) => {

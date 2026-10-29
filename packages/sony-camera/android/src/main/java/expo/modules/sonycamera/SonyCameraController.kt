@@ -329,6 +329,9 @@ internal class SonyCameraController(private val context: Context) {
       trace("Sony PTP authentication complete")
       next.prepareStillCapture()
       trace("still-capture properties requested")
+      // 照片存到哪（主机 / 卡 / 两边）由用户在设置里选，默认 17（出厂值）
+      runCatching { next.setCaptureTarget(captureTarget) }
+        .onFailure { trace("could not apply capture target: ${it.message ?: "unknown"}") }
       transport = next
       // 读中断端点：相机拍完会推 ObjectAdded(0xC201)，参数里带新对象句柄
       next.startEventLoop()
@@ -802,6 +805,25 @@ internal class SonyCameraController(private val context: Context) {
 
   /** 上次兜底取图的时间：同一张不要被连取两次 */
   private var lastBodyFetchAt = 0L
+
+  /** `0xD222`：照片存哪儿。1/16/17 为合法枚举，默认 17；联机后由 JS 侧按设置覆盖。 */
+  @Volatile private var captureTarget = SonyPtpTransport.CAPTURE_TARGET_DEFAULT
+
+  /**
+   * 设置「照片保存位置」：`0xD222`。已联机时立刻生效，下次联机沿用这个值。
+   *
+   * 值来自相机自己的枚举 [1, 17, 16]；具体哪个是"两边都存"需要按机型实测，
+   * 所以值由 JS 侧传下来，不在原生里写死。
+   */
+  fun setCaptureTargetBlocking(value: Int): Map<String, Any?> {
+    captureTarget = value
+    val active = transport
+    if (active != null) {
+      runCatching { active.setCaptureTarget(value) }
+        .onFailure { trace("set capture target failed: ${it.message ?: "unknown"}") }
+    }
+    return statePayload()
+  }
 
   /** 上一次看到的 D215：兜底只在"从没货变成有货"的边沿触发，见 fetchInMemoryShotIfAny */
   private var lastSeenD215 = 0L

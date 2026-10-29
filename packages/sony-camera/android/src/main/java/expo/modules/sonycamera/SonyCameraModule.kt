@@ -49,6 +49,9 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
     // 监视器上那排只读参数（快门/光圈/ISO/EV/白平衡/电量）：一次 0x9209 拿全
     AsyncFunction("readExposure") { controller.readExposureBlocking() }
 
+    // 拍摄目标（照片存到主机 / 卡 / 两边）：写 0xD222，设置页用
+    AsyncFunction("setCaptureTarget") { value: Int -> controller.setCaptureTargetBlocking(value) }
+
     // 诊断：直接发一条 Sony 厂商操作（逆向取图协议时用）
     AsyncFunction("probeVendorOp") { operation: Int, params: List<Int>?, dataHex: String? ->
       val data = dataHex

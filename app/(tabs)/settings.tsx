@@ -5,6 +5,7 @@ import { Alert, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-na
 
 import { eventLog } from '@/core/log';
 import { PREVIEW_SECONDS_OPTIONS, previewSecondsLabel } from '@/core/capturePreview';
+import { CAPTURE_TARGET_OPTIONS } from '@/core/captureTarget';
 import { Button, Card, Hairline, Label, Row, Screen, Segmented, Sheet, T } from '@/design/ui';
 import { color, radius, space, typography } from '@/design/tokens';
 import { logFile, writeTextAtomic } from '@/services/paths';
@@ -232,6 +233,21 @@ export default function SettingsScreen() {
       <View style={styles.section}>
         <Label>相机</Label>
         <Card style={{ marginTop: space.sm }}>
+          <T variant="body" style={{ marginBottom: space.sm }}>
+            照片保存位置
+          </T>
+          <Segmented
+            value={String(settings.captureTarget)}
+            options={CAPTURE_TARGET_OPTIONS.map((option) => ({
+              value: String(option.value),
+              label: option.label,
+            }))}
+            onChange={(v) => void updateSettings({ captureTarget: Number(v) })}
+          />
+          <T variant="monoMuted" style={{ marginTop: space.sm }}>
+            {CAPTURE_TARGET_OPTIONS.find((o) => o.value === settings.captureTarget)?.hint ?? ''}
+          </T>
+          <Hairline />
           <Row
             label="启动时自动连演示相机"
             hint="关掉后每次进入都要手动连接"

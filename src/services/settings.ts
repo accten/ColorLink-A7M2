@@ -1,6 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
 
 import { DEFAULT_PREVIEW_SECONDS, normalizePreviewSeconds } from '@/core/capturePreview';
+import { DEFAULT_CAPTURE_TARGET, normalizeCaptureTarget } from '@/core/captureTarget';
 import { normalizeLongEdge } from '@/core/exportOptions';
 import { readTextSafe, settingsFile, writeTextAtomic } from './paths';
 
@@ -17,6 +18,8 @@ export interface Settings {
   jpegQuality: number;
   /** 拍完在 App 里自动预览几秒（0 = 关闭）；档位见 core/capturePreview */
   previewSeconds: number;
+  /** 照片保存位置（相机 0xD222）：仅平板 / 两边都存 / 仅存储卡；见 core/captureTarget */
+  captureTarget: number;
   haptics: boolean;
   demoMode: boolean;
   showGrid: boolean;
@@ -26,6 +29,7 @@ export const DEFAULT_SETTINGS: Settings = {
   exportLongEdge: 4000,
   jpegQuality: 92,
   previewSeconds: DEFAULT_PREVIEW_SECONDS,
+  captureTarget: DEFAULT_CAPTURE_TARGET,
   haptics: true,
   demoMode: true,
   showGrid: false,
@@ -51,6 +55,7 @@ export async function loadSettings(): Promise<Settings> {
       exportLongEdge: normalizeLongEdge(parsed.exportLongEdge),
       jpegQuality: clampNumber(parsed.jpegQuality, 60, 100, DEFAULT_SETTINGS.jpegQuality),
       previewSeconds: normalizePreviewSeconds(parsed.previewSeconds),
+      captureTarget: normalizeCaptureTarget(parsed.captureTarget),
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
