@@ -328,7 +328,7 @@ internal class SonyPtpTransport private constructor(
   fun objectInMemory(): Long? = readPropertyValue(PROPERTY_OBJECT_IN_MEMORY)
 
   /** `0x1008`：对象的格式/大小/文件名。落盘前判断是不是 JPEG 就靠它。 */
-  fun objectInfo(handle: Int): SonyObjectInfo? = readObjectInfo(handle)
+  internal fun objectInfo(handle: Int): SonyObjectInfo? = readObjectInfo(handle)
 
   /** Populated during [authenticate]; null when the camera refused `GetDeviceInfo`. */
   var deviceInfo: SonyDeviceInfo? = null
@@ -1266,7 +1266,7 @@ private fun clearEndpointHalt(
 private data class PtpContainer(val type: Int, val code: Int, val transactionId: Int, val payload: ByteArray)
 
 /** What `0x1008 GetObjectInfo` reports about the object waiting on a virtual handle. */
-private data class SonyObjectInfo(val size: Int, val format: Int, val name: String)
+internal data class SonyObjectInfo(val size: Int, val format: Int, val name: String)
 private data class PtpResult(val data: ByteArray?, val responseCode: Int)
 
 
