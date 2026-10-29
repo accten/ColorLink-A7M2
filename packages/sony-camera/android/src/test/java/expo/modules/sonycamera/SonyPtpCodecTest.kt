@@ -38,6 +38,26 @@ class SonyPtpCodecTest {
     val invalid = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putInt(20).putInt(500).array()
     assertNull(SonyPtpCodec.parseSonyJpegData(invalid))
   }
+
+  @Test
+  fun acceptsCompleteJpeg() {
+    val jpeg = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 1, 2, 3, 0xFF.toByte(), 0xD9.toByte())
+    assertTrue(SonyPtpCodec.isCompleteJpeg(jpeg))
+  }
+
+  @Test
+  fun rejectsTruncatedJpeg() {
+    // 相机还在写卡时读回来的半截字节：有 SOI，没有 EOI
+    val truncated = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 1, 2, 3, 4, 5, 6)
+    assertFalse(SonyPtpCodec.isCompleteJpeg(truncated))
+  }
+
+  @Test
+  fun ignoresJpegWithoutMagic() {
+    assertFalse(SonyPtpCodec.isCompleteJpeg(byteArrayOf(0x49, 0x49, 0x2A, 0x00)))
+    assertFalse(SonyPtpCodec.isCompleteJpeg(ByteArray(0)))
+    assertFalse(SonyPtpCodec.isCompleteJpeg(byteArrayOf(0xFF.toByte(), 0xD9.toByte())))
+  }
 }
 
 class SonyPtpPropertiesTest {

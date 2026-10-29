@@ -1,5 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 
+import { DEFAULT_PREVIEW_SECONDS, normalizePreviewSeconds } from '@/core/capturePreview';
 import { normalizeLongEdge } from '@/core/exportOptions';
 import { readTextSafe, settingsFile, writeTextAtomic } from './paths';
 
@@ -14,6 +15,8 @@ export interface Settings {
   /** 导出长边；**0 = 保持原图尺寸**（不缩放） */
   exportLongEdge: number;
   jpegQuality: number;
+  /** 拍完在 App 里自动预览几秒（0 = 关闭）；档位见 core/capturePreview */
+  previewSeconds: number;
   haptics: boolean;
   demoMode: boolean;
   showGrid: boolean;
@@ -22,6 +25,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   exportLongEdge: 4000,
   jpegQuality: 92,
+  previewSeconds: DEFAULT_PREVIEW_SECONDS,
   haptics: true,
   demoMode: true,
   showGrid: false,
@@ -46,6 +50,7 @@ export async function loadSettings(): Promise<Settings> {
       // 0 是合法值（原图尺寸），其余按 1024..8192 收敛
       exportLongEdge: normalizeLongEdge(parsed.exportLongEdge),
       jpegQuality: clampNumber(parsed.jpegQuality, 60, 100, DEFAULT_SETTINGS.jpegQuality),
+      previewSeconds: normalizePreviewSeconds(parsed.previewSeconds),
     };
   } catch {
     return { ...DEFAULT_SETTINGS };

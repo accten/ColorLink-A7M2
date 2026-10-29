@@ -29,6 +29,23 @@ export interface Notice {
   action?: { label: string; run: () => void };
 }
 
+/**
+ * 拍完预览的状态：只放渲染需要的最小字段。
+ * 不放整条 Asset（虽然它是纯数据），是为了让组件不依赖资产列表还能活着 ——
+ * 预览期间用户可能在相册里删照片，预览不该跟着黑屏。
+ */
+export interface CapturePreview {
+  id: number;
+  uri: string;
+  thumbUri?: string;
+  fileName: string;
+  bytes: number;
+  width: number;
+  height: number;
+  /** 展示时长（秒）；由设置决定，预览过程中不再变 */
+  seconds: number;
+}
+
 export interface EditorSession {
   params: EditParams;
   presetId: string | null;
@@ -50,6 +67,8 @@ interface AppState {
   notice: Notice | null;
   lastCaptureAt: number | null;
   receivedCount: number;
+  /** 刚回传的照片；非空时根布局上浮一层全屏预览 */
+  capturePreview: CapturePreview | null;
 
   init: () => Promise<void>;
   connectCamera: (mode: CameraMode) => Promise<void>;
@@ -74,6 +93,7 @@ interface AppState {
   markStatus: (assetId: string, status: Asset['status']) => void;
   notify: (tone: NoticeTone, text: string, action?: Notice['action']) => void;
   dismissNotice: () => void;
+  dismissCapturePreview: () => void;
   updateSettings: (patch: Partial<Settings>) => Promise<void>;
   saveKey: (key: string) => Promise<void>;
   removeKey: () => Promise<void>;
@@ -83,6 +103,7 @@ let transport: ICameraTransport | null = null;
 let detachState: (() => void) | null = null;
 let detachPhoto: (() => void) | null = null;
 let noticeSeq = 0;
+let previewSeq = 0;
 /** 上次刷新曝光参数的时刻：监看页每帧都会问，太密对相机没意义 */
 let lastExposureRefreshAt = 0;
 const EXPOSURE_REFRESH_INTERVAL_MS = 1_500;
@@ -127,6 +148,24 @@ export const useAppStore = create<AppState>((set, get) => {
     persist(next);
     haptic('success');
     eventLog.info('ingest.ok', { fileName: asset.fileName, bytes: asset.bytes, mode });
+
+    // 拍完自动预览：0 秒表示用户关掉了，就直接进相册
+    const previewSeconds = state.settings.previewSeconds;
+    if (previewSeconds > 0) {
+      set({
+        capturePreview: {
+          id: ++previewSeq,
+          uri: asset.uri,
+          thumbUri: asset.thumbUri,
+          fileName: asset.fileName,
+          bytes: asset.bytes,
+          width: asset.width,
+          height: asset.height,
+          seconds: previewSeconds,
+        },
+      });
+      eventLog.info('preview.shown', { fileName: asset.fileName, seconds: previewSeconds });
+    }
 
     // 缩略图在后台补：不阻塞入库，也不影响快门手感
     void ensureThumbnail(asset).then((thumbUri) => {
@@ -200,6 +239,7 @@ export const useAppStore = create<AppState>((set, get) => {
     notice: null,
     lastCaptureAt: null,
     receivedCount: 0,
+    capturePreview: null,
 
     init: async () => {
       try {
@@ -417,6 +457,8 @@ export const useAppStore = create<AppState>((set, get) => {
     notify,
 
     dismissNotice: () => set({ notice: null }),
+
+    dismissCapturePreview: () => set({ capturePreview: null }),
 
     updateSettings: async (patch) => {
       const next = { ...get().settings, ...patch };

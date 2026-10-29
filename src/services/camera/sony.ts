@@ -396,15 +396,23 @@ export class SonyCameraTransport implements ICameraTransport {
     const target = ingestFile(fileName);
 
     try {
-      const data = await new File(photo.uri).bytes();
-      if (!data?.length) throw new Error('照片字节为空');
-      if (target.exists) target.delete();
-      await target.write(data);
+      // 原生给的是 App 缓存里的普通文件：**直接移动**进 ingest，不要读进 JS 再写回去。
+      // 一张 24MP JPEG 有 5MB，读+写是两次 5MB 拷贝，还会把它在 JS 堆里复制一份。
+      if (photo.uri.startsWith('file://')) {
+        const source = new File(photo.uri);
+        if (target.exists) target.delete();
+        source.move(target);
+      } else {
+        const data = await new File(photo.uri).bytes();
+        if (!data?.length) throw new Error('照片字节为空');
+        if (target.exists) target.delete();
+        await target.write(data);
+      }
       const hash = await sha256OfFile(target);
       const captured: CapturedPhoto = {
         uri: target.uri,
         fileName,
-        bytes: data.length,
+        bytes: target.size ?? 0,
         width: photo.width,
         height: photo.height,
         capturedAt: Date.now(),

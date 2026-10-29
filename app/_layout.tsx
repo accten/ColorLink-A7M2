@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { CapturePreviewOverlay } from '@/components/CapturePreviewOverlay';
 import { NoticeHost } from '@/components/NoticeHost';
 import { color } from '@/design/tokens';
 import { useAppStore } from '@/state/useAppStore';
@@ -58,6 +59,8 @@ export default function RootLayout() {
           <Stack.Screen name="live" options={{ animation: 'fade', presentation: 'fullScreenModal' }} />
           <Stack.Screen name="editor/[id]" options={{ animation: 'slide_from_right' }} />
         </Stack>
+        {/* 拍完预览压在所有页面之上：机身快门在手上时用户可能停在任意一页 */}
+        <CapturePreviewOverlay />
         <NoticeHost />
       </ThemeProvider>
     </SafeAreaProvider>

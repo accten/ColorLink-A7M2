@@ -762,12 +762,20 @@ internal class SonyCameraController(private val context: Context) {
     trace("body shutter: fetching announced object")
     if (wasStreaming) stopLiveView(preserveRequest = true)
     try {
-      // 相机还在写卡：给它一点时间再读，读不到就再试，最多两轮
+      // 相机还在写卡：给它一点时间再读，读不到或读回半截就退避重试。
+      // 第一次只等 120ms：大多数情况下相机此时已经写完（实测事件到读完约 150ms）；
+      // 半截字节用 EOI 判断（相机此时可能只写了一半），不完整就继续等。
       var jpeg: ByteArray? = null
-      for (attempt in 0 until 2) {
-        SystemClock.sleep(if (attempt == 0) 400 else 700)
-        jpeg = runCatching { active.fetchObject(handle) }.getOrNull()
-        if (jpeg != null) break
+      for (attempt in 0 until 3) {
+        SystemClock.sleep(if (attempt == 0) 120L else if (attempt == 1) 300L else 700L)
+        val candidate = runCatching { active.fetchObject(handle) }.getOrNull() ?: continue
+        if (SonyPtpCodec.isCompleteJpeg(candidate)) {
+          jpeg = candidate
+          break
+        }
+        trace("body shutter: incomplete jpeg ${candidate.size} bytes, retrying")
+        // 留着当兜底：万一机身对文件做了填充，尾部的 EOI 不在窗口里
+        if (jpeg == null) jpeg = candidate
       }
       if (jpeg != null) {
         runCatching { persistCapturedJpeg(jpeg) }
@@ -782,30 +790,33 @@ internal class SonyCameraController(private val context: Context) {
     }
   }
 
-  private fun persistCapturedJpeg(jpeg: ByteArray, notify: Boolean = true): Map<String, Any?> {    val signature = jpeg.take(4).joinToString("") { "%02X".format(it) }
-    val bitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
-      ?: run {
-        // Sony 的 RAW(ARW) 是 TIFF 容器，BitmapFactory 解不了。说清楚是什么，
-        // 而不是丢一句"unreadable image"让用户以为传输坏了。
-        if (signature == "49492A00" || signature == "4D4D002A") {
-          throw SonyPtpException(
-            "RAW_CAPTURE the camera returned a RAW (ARW) file, which cannot be graded yet. " +
-              "Set the camera's image quality to JPEG (or RAW+JPEG) and shoot again.",
-          )
-        }
-        throw SonyPtpException("Sony returned an unreadable image (signature=$signature, ${jpeg.size} bytes).")
+  private fun persistCapturedJpeg(jpeg: ByteArray, notify: Boolean = true): Map<String, Any?> {
+    val signature = jpeg.take(4).joinToString("") { "%02X".format(it) }
+    // 只读尺寸，不解码像素：以前为了拿宽高，对 24MP 图做整张 decode（~100ms + 96MB 分配），
+    // 白白拖慢回传。inJustDecodeBounds 只读文件头，几毫秒。
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+      // Sony 的 RAW(ARW) 是 TIFF 容器，BitmapFactory 解不了。说清楚是什么，
+      // 而不是丢一句"unreadable image"让用户以为传输坏了。
+      if (signature == "49492A00" || signature == "4D4D002A") {
+        throw SonyPtpException(
+          "RAW_CAPTURE the camera returned a RAW (ARW) file, which cannot be graded yet. " +
+            "Set the camera's image quality to JPEG (or RAW+JPEG) and shoot again.",
+        )
       }
+      throw SonyPtpException("Sony returned an unreadable image (signature=$signature, ${jpeg.size} bytes).")
+    }
     val name = "sony-camera-${System.currentTimeMillis()}.jpg"
     val output = File(context.cacheDir, name)
     FileOutputStream(output).use { it.write(jpeg) }
     val payload = mapOf(
       "uri" to Uri.fromFile(output).toString(),
-      "width" to bitmap.width,
-      "height" to bitmap.height,
+      "width" to bounds.outWidth,
+      "height" to bounds.outHeight,
       "fileName" to name,
       "mimeType" to "image/jpeg",
     )
-    bitmap.recycle()
     if (notify) listeners.forEach { it.onPhotoCaptured(payload) }
     trace("captured JPEG persisted bytes=${jpeg.size}")
     return payload

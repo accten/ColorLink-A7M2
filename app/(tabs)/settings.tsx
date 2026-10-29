@@ -4,6 +4,7 @@ import React, { useCallback, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
 
 import { eventLog } from '@/core/log';
+import { PREVIEW_SECONDS_OPTIONS, previewSecondsLabel } from '@/core/capturePreview';
 import { Button, Card, Hairline, Label, Row, Screen, Segmented, Sheet, T } from '@/design/ui';
 import { color, radius, space, typography } from '@/design/tokens';
 import { logFile, writeTextAtomic } from '@/services/paths';
@@ -202,6 +203,27 @@ export default function SettingsScreen() {
           <T variant="monoMuted" style={{ marginTop: space.sm }}>
             100 是 JPEG 最高质量。没做任何调色时选「原图尺寸 + 100」会直接复制原图字节，
             不重新编码。
+          </T>
+        </Card>
+      </View>
+
+      {/* 拍摄 */}
+      <View style={styles.section}>
+        <Label>拍摄</Label>
+        <Card style={{ marginTop: space.sm }}>
+          <T variant="body" style={{ marginBottom: space.sm }}>
+            拍完自动预览
+          </T>
+          <Segmented
+            value={String(settings.previewSeconds)}
+            options={PREVIEW_SECONDS_OPTIONS.map((value) => ({
+              value: String(value),
+              label: previewSecondsLabel(value),
+            }))}
+            onChange={(v) => void updateSettings({ previewSeconds: Number(v) })}
+          />
+          <T variant="monoMuted" style={{ marginTop: space.sm }}>
+            照片回传完成后全屏展示这么久，轻点一下可以提前关掉；关掉之后照片照样进相册。
           </T>
         </Card>
       </View>

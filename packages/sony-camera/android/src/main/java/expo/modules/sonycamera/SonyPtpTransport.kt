@@ -74,7 +74,7 @@ internal class SonyPtpTransport private constructor(
      */
     private const val SONY_PROTOCOL_EXTENDED = 0x012C
     private const val MAX_CONTAINER_BYTES = 100 * 1024 * 1024
-    private const val MAX_USB_READ_BYTES = 64 * 1024
+    private const val MAX_USB_READ_BYTES = 256 * 1024
 
     /** 属性轮询连续失败几次就停用（宁可不显示参数，也不能把联机读死） */
     private const val MAX_EXPOSURE_POLL_FAILURES = 3

@@ -47,7 +47,7 @@
 |---|---|---|---|
 | 1 | 类型检查（strict） | `npx tsc --noEmit` | ✅ 0 error |
 | 2 | Lint（eslint-config-expo + react-hooks 规则） | `npx eslint app src tests` | ✅ 0 error / 0 warning |
-| 3 | 纯逻辑单测 | `npx vitest run` | ✅ 9 文件 / **109 用例全通过** |
+| 3 | 纯逻辑单测 | `npx vitest run` | ✅ 13 文件 / **132 用例全通过**（v0.1.4 起） |
 | 4 | 依赖与配置体检 | `npx expo-doctor` | ✅ 20/20 通过 |
 | 5 | 应用配置解析 | `npx expo config --type public` | ✅ 通过（含插件解析） |
 | 6 | 生产打包（Metro + Hermes） | `npx expo export -p android` | ✅ 生成 android bundle |
@@ -155,7 +155,7 @@
 ```bash
 npx tsc --noEmit          # 类型
 npx eslint app src tests  # 静态检查
-npx vitest run            # 126 个用例
+npx vitest run            # 132 个用例
 npx expo-doctor           # 依赖/配置
 npx expo export -p android --output-dir .export-check   # 生产打包（产物可删）
 ```
@@ -200,7 +200,7 @@ Android 模块里真正"容易错"的部分是解析：PTP 容器、Sony 属性�
 这些都不 import `android.*`，所以不必等十几分钟的 Gradle 构建：
 
 ```powershell
-pwsh scripts/test-kotlin.ps1     # kotlinc + JUnit，49 个用例，约 3 秒
+pwsh scripts/test-kotlin.ps1     # kotlinc + JUnit，54 个用例，约 3 秒
 ```
 
 依赖（本机 `_work/`，不入库）：`kotlin-compiler-2.1.0`、`junit-4.13.2`、`hamcrest-core-1.3`、JDK 17。
@@ -216,3 +216,22 @@ pwsh scripts/test-kotlin.ps1     # kotlinc + JUnit，49 个用例，约 3 秒
 
 APK 工作流里也加了 `:expo-sony-camera:test`（聚合任务，不随 AGP 改名的变体后缀任务走），
 CI 每次构建都会跑同一批用例。
+
+## 9. 回传提速与拍完预览（v0.1.4）
+
+用户反馈「回传很慢，且希望在回传后自动播放预览」。逐段量了一下，慢的不是 USB 本身：
+
+| 环节 | 之前 | 现在 | 说明 |
+|---|---|---|---|
+| USB 整读 4.7MB 对象 | 每次 `bulkTransfer` 最多 64KB，约 72 次往返 | 264KB/次，约 19 次 | 单次往返 ~2ms，光分片就省掉 ~100ms |
+| 落盘前拿宽高 | `BitmapFactory.decodeByteArray` 整张解码（24MP → ~100ms + 96MB 分配） | `inJustDecodeBounds` 只读文件头，几毫秒 | 只是要尺寸，没理由解像素 |
+| 缓存 → `ingest/` | `bytes()` 读进 JS 再 `write()` 写回（两次 5MB 拷贝） | `File.move()`（同分区 rename） | 不占 JS 堆 |
+| 机身快门等待 | 收到 `0xC201` 后固定等 400ms 再读 | 120ms 首试，不完整再 300/700ms 退避 | 相机多数时候已写完；半截字节用 EOI 判断后重读 |
+
+- 完整性判断放在 `SonyPtpCodec.isCompleteJpeg`（纯 Kotlin，有 3 个本地用例）：SOI 开头 + 尾部窗口内 `FF D9`。
+  不做这一步的话，把首试从 400ms 降到 120ms 会有"落一张半截 JPEG"的风险——它照样能读出宽高，只是图坏了。
+- 拍完预览：`ingestPhoto` 落库后写 `capturePreview`，根布局最外层的 `CapturePreviewOverlay` 全屏展示
+  `settings.previewSeconds` 秒（0/2/3/5/10，默认 3，0 = 关闭），轻点提前关。挂在根布局是因为
+  **机身快门在用户手上，按快门时 App 可能停在任意一页**，只在取景页做会漏掉一半场景。
+- 校验：`tests/capture-preview.test.ts` 6 个用例锁住"0 必须是合法值""档位之间取最近""null/undefined 回落默认"。
+

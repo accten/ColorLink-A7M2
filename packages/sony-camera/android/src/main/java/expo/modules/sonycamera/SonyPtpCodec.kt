@@ -56,6 +56,23 @@ internal object SonyPtpCodec {
     return data
   }
 
+  /**
+   * JPEG 是否"已经写完"：SOI 开头，且末尾一段窗口里有 EOI（`FF D9`）。
+   *
+   * 用途：机身快门那条路是先收到 `0xC201` 事件再去读对象，相机此时可能还在往卡里写，
+   * 读回来的是半截字节。半截 JPEG 仍能被 BitmapFactory 读出宽高，落盘后就是一张坏图，
+   * 所以读之前先判断完整性，不完整就退避重读。
+   */
+  fun isCompleteJpeg(data: ByteArray, tailWindow: Int = 64): Boolean {
+    if (data.size < 4) return false
+    if (data[0] != 0xFF.toByte() || data[1] != 0xD8.toByte()) return false
+    val from = maxOf(2, data.size - tailWindow.coerceAtLeast(2))
+    for (index in data.size - 2 downTo from) {
+      if (data[index] == 0xFF.toByte() && data[index + 1] == 0xD9.toByte()) return true
+    }
+    return false
+  }
+
   private fun isObjectMagic(data: ByteArray, at: Int): Boolean {
     if (at + 3 >= data.size) return false
     val b0 = data[at].toInt() and 0xFF
