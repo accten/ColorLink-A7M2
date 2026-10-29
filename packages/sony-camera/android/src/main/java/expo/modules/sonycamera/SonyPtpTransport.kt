@@ -97,7 +97,7 @@ internal class SonyPtpTransport private constructor(
     private const val CAPTURE_PROBE_INTERVAL_MS = 1_200L
 
     /** 等回传时的 D215 轮询间隔（相机在写卡，问太勤它会不回包） */
-    private const val CAPTURE_POLL_INTERVAL_MS = 250L
+    private const val CAPTURE_POLL_INTERVAL_MS = 500L
 
     /** 按住快门等对焦的最长时间（参考实现是 1s） */
     private const val CAPTURE_PRESS_HOLD_MS = 1_000L

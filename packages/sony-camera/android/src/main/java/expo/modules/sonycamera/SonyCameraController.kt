@@ -628,6 +628,17 @@ internal class SonyCameraController(private val context: Context) {
       if (resumeStream) startLiveView()
       throw cause
     }
+    // "等不到照片"不是联机故障：相机还在正常应答属性（只是在合焦/写卡上没成）。
+    // 以前这里会 fail() 把传输关掉，相机之后常常就不再应答、只能拔插。
+    if (cause is SonyPtpException) {
+      val message = cause.message ?: ""
+      if (message.contains("CAPTURE_NO_FOCUS") || message.contains("no image came back")) {
+        trace("capture produced no image; keeping the session")
+        updateState("ready", "这次没拍到照片（相机没合焦或没开火）。相机仍在线，可以直接再按一次。")
+        if (resumeStream) startLiveView()
+        throw cause
+      }
+    }
     if (cause is SonyPtpException && cause.retryable && scalarTransport != null) {
       trace("recoverable Scalar capture failure preserved session: ${cause.message ?: "unknown"}")
       updateState("ready", "Sony rejected this capture. The camera remains connected; reframe and try again.")
