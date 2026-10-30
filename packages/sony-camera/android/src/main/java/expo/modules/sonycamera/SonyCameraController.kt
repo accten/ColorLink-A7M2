@@ -927,6 +927,9 @@ internal class SonyCameraController(private val context: Context) {
       var jpeg: ByteArray? = null
       var sawNonJpeg = false
       var lastNonJpegFormat = 0
+      // 机身画质设成"只出 RAW"时，句柄上只有 ARW、永远不会有 JPEG。9.3 的经验是不能不读
+      // （不读句柄不前进，下一枪就卡住），所以照样读走；这里的差别是读走的字节留着落盘。
+      var rawOnly: ByteArray? = null
       for (attempt in 0 until BODY_SHUTTER_MAX_READS) {
         SystemClock.sleep(if (attempt == 0) 120L else if (attempt == 1) 300L else 600L)
         val info = runCatching { active.objectInfo(handle) }.getOrNull()
@@ -939,7 +942,10 @@ internal class SonyCameraController(private val context: Context) {
               info.name,
             ),
           )
-          runCatching { active.fetchObject(handle) }
+          val payload = runCatching { active.fetchObject(handle) }.getOrNull()
+          if (payload != null && rawOnly == null && SonyPtpCodec.isSonyRawObjectFormat(info.format)) {
+            rawOnly = payload
+          }
           continue
         }
         val candidate = runCatching { active.fetchObject(handle) }.getOrNull() ?: continue
@@ -957,6 +963,12 @@ internal class SonyCameraController(private val context: Context) {
             updateState("ready", "已取回相机上拍的那一张。")
           }
           .onFailure { updateState("ready", "照片已取回，但无法预览：${it.message ?: "unknown"}") }
+      } else if (rawOnly != null) {
+        // 没有 JPEG 可以预览，但 RAW 原文件是有用的：存下来，图库里带 RAW 角标的一格
+        trace("body shutter: RAW-only capture (format=0x%04X), keeping the raw file".format(lastNonJpegFormat))
+        runCatching { persistCapturedRaw(rawOnly) }
+          .onSuccess { updateState("ready", "相机这一张只回传了 RAW(ARW)，原文件已保存（没有 JPEG，不能直接调色）。") }
+          .onFailure { updateState("ready", "照片已取回，但无法保存 RAW：${it.message ?: "unknown"}") }
       } else if (sawNonJpeg) {
         trace("body shutter: only non-JPEG objects (last format=0x%04X)".format(lastNonJpegFormat))
         updateState(

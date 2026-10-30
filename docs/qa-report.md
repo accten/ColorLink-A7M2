@@ -496,4 +496,34 @@ responder，手势中途换 handler 导致后续 move 事件丢失 —— 真机
    能救回来的就不需要用户拔插了。
 
 
+### 9.15 RAW + JPEG 两张都回传（v0.3.0，图库标签与批量导出在 v0.3.1）
+
+用户要求「和像素蛋糕一样：RAW 和 JPEG 两个文件都要回传」。9.3 里我们已经知道同一个句柄
+`0xFFFFC001` 会先给 JPEG、读走后再给 ARW，当时的做法是**把 ARW 读走丢掉**（否则句柄不前进，
+下一枪会卡住）。这一轮把它改成"读走并保留"：
+
+```
+16:53:56.1  object info handle=FFFFC001 format=0x3801 bytes=6955817  name=DSC00769.JPG
+16:53:56.3  captured JPEG persisted                                   ← 预览/调色用这张
+16:53:56.4  follow-up object is RAW (DSC00769.ARW, 24955136 bytes); fetching
+16:53:57.7  captured RAW persisted bytes=24955136 preview=1616x1080 thumb=true
+```
+
+要点：
+
+1. **抓完 JPEG 立刻再取一次同一个句柄**（`takeFollowUpRaw`）：先 `0x1008` 看 `format`，
+   是 `0xB101` 才真读 24MB，否则一个字节都不读——机身只给 JPEG 时不浪费这 1.3 秒。
+2. **ARW 原样落盘**（`sony-camera-<ts>.arw`），另外用 `BitmapFactory` 解它内嵌的 JPEG 预览
+   （`inSampleSize` 到 480px 边）存成缩略图，图库格子才有画面。
+3. **RAW 不进调色**：Skia 解不了 TIFF/ARW（`decodeImage` 返回 null）。点开 RAW 走只读页，
+   显示内嵌预览 + 文件名/大小 + "去调同一张的 JPEG"的说明；批量导出也直接跳过并说明原因，
+   不再报一条看不懂的 `decode returned null`。
+4. 图库格子对 RAW **只标 `ARW`**，不标兆像素——`getObjectInfo` 给的宽高来自内嵌预览
+   （1616×1080），标出去是错的 1.7 MP。
+
+实测数字（OPPO Pad 4 Pro + A7M2，PC 遥控模式，机身画质 RAW & JPEG）：
+JPEG 6.96MB 读出 + 落盘 0.3 秒，ARW 24.9MB 读出 + 落盘约 1.3 秒，两张都在预览之后到齐；
+`0xD222` 三个值依旧都不写卡（固件行为）。
+
+
 
