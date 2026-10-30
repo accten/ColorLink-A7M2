@@ -258,6 +258,13 @@ export default function GalleryScreen() {
                       transition={140}
                       recyclingKey={asset.id}
                     />
+                    {asset.raw ? (
+                      <View style={styles.rawTag} pointerEvents="none">
+                        <T variant="mono" style={styles.rawTagText}>
+                          RAW
+                        </T>
+                      </View>
+                    ) : null}
                     {selecting ? (
                       <View style={[styles.check, isSelected && styles.checkActive]}>
                         {isSelected ? <Ionicons name="checkmark" size={13} color={color.accentInk} /> : null}
@@ -275,6 +282,11 @@ export default function GalleryScreen() {
                         {formatMegapixels(asset.width, asset.height)}
                       </T>
                     )}
+                    {asset.raw ? (
+                      <T variant="mono" style={[styles.cellMono, styles.cellRaw]} numberOfLines={1}>
+                        ARW
+                      </T>
+                    ) : null}
                     {edited ? <View style={styles.editedDot} /> : null}
                   </View>
                 </Pressable>
@@ -498,6 +510,17 @@ const styles = StyleSheet.create({
   },
   cellMono: { ...typography.monoMuted, fontSize: 10 },
   cellSummary: { flex: 1, marginRight: 4 },
+  rawTag: {
+    position: 'absolute',
+    left: 6,
+    top: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: radius.xs,
+    backgroundColor: 'rgba(10,11,12,0.72)',
+  },
+  rawTagText: { fontSize: 9.5, letterSpacing: 0.6, color: color.accent },
+  cellRaw: { marginLeft: 'auto', color: color.textFaint },
   editedDot: {
     width: 5,
     height: 5,

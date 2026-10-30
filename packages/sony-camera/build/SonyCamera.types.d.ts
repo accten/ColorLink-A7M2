@@ -86,7 +86,11 @@ export type SonyPhoto = {
     width: number;
     height: number;
     fileName: string;
-    mimeType: 'image/jpeg';
+    mimeType: 'image/jpeg' | 'image/x-sony-arw';
+    /** true = RAW(ARW) 原文件 */
+    raw?: boolean;
+    /** RAW 的缩略图（原生从内嵌预览解出来） */
+    thumbUri?: string;
 };
 export type SonyConnectOptions = {
     candidateId?: string;

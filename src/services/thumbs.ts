@@ -50,6 +50,26 @@ export function existingPreview(asset: Pick<Asset, 'id'> & { previewUri?: string
 }
 
 /**
+ * 收下原生给的缩略图（RAW 用）。
+ *
+ * ARW 是 TIFF 容器，Skia 的 `MakeImageFromEncoded` 解不了，所以原生保存 RAW 时
+ * 顺便把它内嵌的预览缩成 jpg 放在缓存里；这里挪进 thumbs/，避免缓存被清掉后图库变空白。
+ */
+export async function adoptThumbnail(assetId: string, sourceUri: string): Promise<string | null> {
+  try {
+    const target = thumbFile(thumbNameFor(assetId));
+    if (target.exists) target.delete();
+    const source = new File(sourceUri);
+    if (!source.exists) return null;
+    source.move(target);
+    return target.uri;
+  } catch (error) {
+    eventLog.warn('thumb.adopt.failed', { assetId, error: String(error) });
+    return null;
+  }
+}
+
+/**
  * 生成（或复用）某张图的两档派生图。
  * 任何一步失败都返回 null 字段，调用方回落到原图 —— 派生图不能成为阻塞项。
  */

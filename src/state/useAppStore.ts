@@ -15,7 +15,7 @@ import {
 import { eventLog } from '@/core/log';
 import { CameraMode, CameraSnapshot, CapturedPhoto, ICameraTransport, IDLE_SNAPSHOT } from '@/services/camera/types';
 import { DemoCameraTransport } from '@/services/camera/demo';
-import { backfillDerivatives, ensureDerivatives } from '@/services/thumbs';
+import { adoptThumbnail, backfillDerivatives, ensureDerivatives } from '@/services/thumbs';
 import { createUsbTransport } from '@/services/camera/usb';
 import { assetFromPhoto, deleteAssetFile, loadAssets, saveAssets, seedDemoAssets } from '@/services/library';
 import { loadSessions, scheduleSaveSessions, flushSessionsNow } from '@/services/sessionStore';
@@ -182,9 +182,11 @@ export const useAppStore = create<AppState>((set, get) => {
     haptic('success');
     eventLog.info('ingest.ok', { fileName: asset.fileName, bytes: asset.bytes, mode });
 
-    // 拍完自动预览：0 表示用户关掉了，就直接进相册；负数（一直）也走这里
+    // 拍完自动预览：0 表示用户关掉了，就直接进相册；负数（一直）也走这里。
+    // RAW 不弹预览：RAW+JPEG 时同一张会先来 JPEG（已经预览过），RAW 紧跟其后；
+    // 而 ARW 是 TIFF，预览浮层渲染不了，弹出来只会闪一下黑屏。
     const previewSeconds = state.settings.previewSeconds;
-    if (previewSeconds !== 0) {
+    if (previewSeconds !== 0 && !asset.raw) {
       set({
         capturePreview: {
           id: ++previewSeq,
@@ -206,6 +208,20 @@ export const useAppStore = create<AppState>((set, get) => {
     // 预览开着的时候先等它放完 —— 派生图要 Skia 整张解一次 24MP，
     // 和预览那张图抢解码只会让预览更晚出来。
     const derivativeTask = () => {
+      // RAW：Skia 解不了 TIFF，缩略图由原生从 ARW 内嵌预览解好交过来，这里只把它收进 thumbs/。
+      if (asset.raw) {
+        const source = photo.thumbUri;
+        if (!source) return;
+        void adoptThumbnail(asset.id, source).then((thumbUri) => {
+          if (!thumbUri) return;
+          const current = get().assets;
+          if (!current.some((item) => item.id === asset.id)) return;
+          const patched = current.map((item) => (item.id === asset.id ? { ...item, thumbUri } : item));
+          set({ assets: patched });
+          persist(patched);
+        });
+        return;
+      }
       void ensureDerivatives(asset).then((derived) => {
         if (!derived.thumbUri && !derived.previewUri) return;
         const current = get().assets;

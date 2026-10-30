@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.hardware.usb.UsbDevice
@@ -54,6 +55,9 @@ internal class SonyCameraController(private val context: Context) {
 
     /** 兜底取图后的冷却：别在相机还没清理干净时连取两次同一张 */
     private const val BODY_SHUTTER_FETCH_COOLDOWN_MS = 3_000L
+
+    /** RAW 缩略图长边（和 JS 侧 480px 的缩略图保持一致） */
+    private const val RAW_THUMB_EDGE = 480
 
     /** 死链路自动重连的冷却：一次尝试失败后别马上再来一遍 */
     private const val DEAD_LINK_RECOVERY_COOLDOWN_MS = 15_000L
@@ -681,6 +685,8 @@ internal class SonyCameraController(private val context: Context) {
       activeTransport.awaitCapturedJpeg(35_000)
     }
     val payload = persistCapturedJpeg(jpeg)
+    // RAW+JPEG 模式：同一张的 RAW 还挂在这个句柄上，一起收回来（像素蛋糕也是这样）
+    activeTransport?.let { takeFollowUpRaw(it) }
     updateState("ready", "Photo transferred from Sony camera.")
     return payload
   }
@@ -946,7 +952,10 @@ internal class SonyCameraController(private val context: Context) {
       }
       if (jpeg != null) {
         runCatching { persistCapturedJpeg(jpeg) }
-          .onSuccess { updateState("ready", "已取回相机上拍的那一张。") }
+          .onSuccess {
+            takeFollowUpRaw(active)
+            updateState("ready", "已取回相机上拍的那一张。")
+          }
           .onFailure { updateState("ready", "照片已取回，但无法预览：${it.message ?: "unknown"}") }
       } else if (sawNonJpeg) {
         trace("body shutter: only non-JPEG objects (last format=0x%04X)".format(lastNonJpegFormat))
@@ -993,10 +1002,74 @@ internal class SonyCameraController(private val context: Context) {
       "height" to bounds.outHeight,
       "fileName" to name,
       "mimeType" to "image/jpeg",
+      "raw" to false,
     )
     if (notify) listeners.forEach { it.onPhotoCaptured(payload) }
     trace("captured JPEG persisted bytes=${jpeg.size}")
     return payload
+  }
+
+  /**
+   * 保存相机回的 RAW(ARW)。
+   *
+   * 和 JPEG 一样写到缓存目录，但多给一个 `thumbUri`：ARW 是 TIFF 容器，Skia 解不了，
+   * 所以这里用 `BitmapFactory` 解它内嵌的预览图，缩到 480px 存成 jpg 给图库当缩略图。
+   * （`BitmapFactory` 对 ARW 恰好能读出那张嵌入预览——之前误存 24MB 假 jpg 就是它的副作用。）
+   */
+  private fun persistCapturedRaw(raw: ByteArray, notify: Boolean = true): Map<String, Any?> {
+    val stamp = System.currentTimeMillis()
+    val name = "sony-camera-$stamp.arw"
+    val output = File(context.cacheDir, name)
+    FileOutputStream(output).use { it.write(raw) }
+
+    var width = 0
+    var height = 0
+    var thumbUri: String? = null
+    runCatching {
+      val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+      BitmapFactory.decodeByteArray(raw, 0, raw.size, bounds)
+      width = maxOf(0, bounds.outWidth)
+      height = maxOf(0, bounds.outHeight)
+      if (width > 0 && height > 0) {
+        var sample = 1
+        while (width / sample > RAW_THUMB_EDGE || height / sample > RAW_THUMB_EDGE) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        val preview = BitmapFactory.decodeByteArray(raw, 0, raw.size, opts) ?: return@runCatching
+        val thumbFile = File(context.cacheDir, "sony-raw-thumb-$stamp.jpg")
+        FileOutputStream(thumbFile).use { stream ->
+          preview.compress(Bitmap.CompressFormat.JPEG, 80, stream)
+        }
+        preview.recycle()
+        thumbUri = Uri.fromFile(thumbFile).toString()
+      }
+    }.onFailure { trace("raw preview decode failed: ${it.message ?: "unknown"}") }
+
+    val payload = buildMap<String, Any?> {
+      put("uri", Uri.fromFile(output).toString())
+      put("width", width)
+      put("height", height)
+      put("fileName", name)
+      put("mimeType", "image/x-sony-arw")
+      put("raw", true)
+      if (thumbUri != null) put("thumbUri", thumbUri)
+    }
+    if (notify) listeners.forEach { it.onPhotoCaptured(payload) }
+    trace("captured RAW persisted bytes=${raw.size} preview=${width}x$height thumb=${thumbUri != null}")
+    return payload
+  }
+
+  /**
+   * JPEG 取完之后，句柄上可能还挂着同一张的 RAW（机身在 RAW+JPEG 模式）。
+   *
+   * 只读"确认是 RAW"的那一个对象：万一后面换成下一张的 JPEG，提前读走会把它吃掉。
+   */
+  private fun takeFollowUpRaw(active: SonyPtpTransport) {
+    val info = runCatching { active.objectInfo(active.capturedImageHandle) }.getOrNull() ?: return
+    if (!SonyPtpCodec.isSonyRawObjectFormat(info.format)) return
+    trace("follow-up object is RAW (${info.name}, ${info.size} bytes); fetching")
+    val raw = runCatching { active.takeObjectPayload(active.capturedImageHandle) }.getOrNull() ?: return
+    runCatching { persistCapturedRaw(raw) }
+      .onFailure { trace("persist RAW failed: ${it.message ?: "unknown"}") }
   }
 
   fun close() {

@@ -22,6 +22,8 @@ export interface Asset {
   status: AssetStatus;
   source: AssetSource;
   cameraFileName?: string;
+  /** true = 相机回的 RAW(ARW) 原文件：只保存/导出原文件，不做调色 */
+  raw?: boolean;
 }
 
 const pad = (v: number, len = 2) => String(v).padStart(len, '0');

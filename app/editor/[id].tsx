@@ -94,7 +94,52 @@ export default function EditorScreen() {
     );
   }
 
+  // RAW(ARW)：只保存原文件，不进调色管线（Skia 解不了 TIFF）
+  if (asset.raw) return <RawAssetScreen asset={asset} />;
+
   return <EditorBody asset={asset} />;
+}
+
+/**
+ * RAW(ARW) 资产：只保存原文件，不做调色。
+ *
+ * 现在的调色管线是 Skia + JPEG 编码，解不了 TIFF 容器；强行进编辑器只会黑屏。
+ * 这里给一个明确的只读页：能看到内嵌预览、知道文件在哪、能返回。
+ */
+function RawAssetScreen({ asset }: { asset: Asset }) {
+  const insets = useSafeAreaInsets();
+  return (
+    <View style={[styles.root, { paddingTop: insets.top }]}>
+      <View style={styles.topBar}>
+        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.iconBtn}>
+          <Ionicons name="chevron-back" size={22} color={color.text} />
+        </Pressable>
+        <View style={{ flex: 1, paddingHorizontal: space.sm }}>
+          <T variant="mono" numberOfLines={1}>
+            {asset.fileName}
+          </T>
+          <T variant="monoMuted" numberOfLines={1} style={{ marginTop: 2 }}>
+            RAW(ARW) · {formatBytes(asset.bytes)}
+          </T>
+        </View>
+      </View>
+      <View style={styles.stage}>
+        <Image
+          source={{ uri: asset.thumbUri ?? asset.uri }}
+          style={{ width: '100%', height: '100%' }}
+          contentFit="contain"
+        />
+      </View>
+      <View style={{ padding: space.lg, gap: space.sm }}>
+        <T variant="body">这是相机回传的 RAW 原文件</T>
+        <T variant="monoMuted">
+          ARW 已完整保存在 App 私有目录里（图库里带 RAW 标记那张），但当前调色引擎只处理 JPEG，
+          所以这张不能调色。需要修图时请把相机画质设成 JPEG 或 JPEG+RAW，JPEG 那张会自动一起回传。
+        </T>
+        <Button title="返回图库" onPress={() => router.back()} variant="secondary" style={{ marginTop: space.sm }} />
+      </View>
+    </View>
+  );
 }
 
 function EditorBody({ asset }: { asset: Asset }) {

@@ -432,7 +432,10 @@ export class SonyCameraTransport implements ICameraTransport {
     for (const [uri, at] of this.recentPhotoUris) {
       if (now - at > PHOTO_DEDUPE_WINDOW_MS) this.recentPhotoUris.delete(uri);
     }
-    const fileName = ingestFileName(new Date(), nextSeq(), 'jpg');
+    // RAW+JPEG 时相机会连着回两个对象：JPEG 和 ARW。扩展名跟着 mimeType 走，
+    // 否则 ARW 会以 .jpg 存下来（早期就是这么误存了 24MB 的假 jpg）。
+    const isRaw = photo.raw === true || photo.mimeType === 'image/x-sony-arw';
+    const fileName = ingestFileName(new Date(), nextSeq(), isRaw ? 'ARW' : 'jpg');
     const target = ingestFile(fileName);
 
     try {
@@ -457,8 +460,16 @@ export class SonyCameraTransport implements ICameraTransport {
         height: photo.height,
         capturedAt: Date.now(),
         hash,
+        ...(isRaw ? { raw: true } : {}),
+        ...(photo.thumbUri ? { thumbUri: photo.thumbUri } : {}),
       };
-      eventLog.info('camera.photo.saved', { fileName, bytes: captured.bytes, width: photo.width, height: photo.height });
+      eventLog.info('camera.photo.saved', {
+        fileName,
+        bytes: captured.bytes,
+        width: photo.width,
+        height: photo.height,
+        raw: isRaw,
+      });
       for (const listener of this.photoListeners) listener(captured);
       return captured;
     } catch (error) {
@@ -473,6 +484,7 @@ export class SonyCameraTransport implements ICameraTransport {
         height: photo.height,
         capturedAt: Date.now(),
         hash: '',
+        ...(isRaw ? { raw: true } : {}),
       };
       for (const listener of this.photoListeners) listener(fallback);
       return fallback;

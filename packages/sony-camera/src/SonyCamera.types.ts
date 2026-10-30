@@ -127,7 +127,11 @@ export type SonyPhoto = {
   width: number;
   height: number;
   fileName: string;
-  mimeType: 'image/jpeg';
+  mimeType: 'image/jpeg' | 'image/x-sony-arw';
+  /** true = 相机回来的 RAW(ARW) 原文件（RAW+JPEG 模式下除 JPEG 之外那一个） */
+  raw?: boolean;
+  /** RAW 的缩略图（原生从 ARW 内嵌预览解出来的 jpg），JS 侧 Skia 解不了 TIFF 所以由原生给 */
+  thumbUri?: string;
 };
 
 export type SonyConnectOptions = {

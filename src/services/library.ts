@@ -61,7 +61,8 @@ export function assetFromPhoto(photo: CapturedPhoto, source: Asset['source'], se
     id: newAssetId(new Date(photo.capturedAt), seq),
     fileName: photo.fileName,
     uri: photo.uri,
-    thumbUri: photo.uri,
+    // RAW 的缩略图由原生从 ARW 内嵌预览解出来；没有就先用原文件（Skia 解不了 TIFF，会显示空白）
+    thumbUri: photo.thumbUri ?? photo.uri,
     capturedAt: photo.capturedAt,
     width: photo.width,
     height: photo.height,
@@ -69,6 +70,7 @@ export function assetFromPhoto(photo: CapturedPhoto, source: Asset['source'], se
     bytes: photo.bytes,
     status: 'ingested',
     source,
+    ...(photo.raw ? { raw: true } : {}),
   };
 }
 

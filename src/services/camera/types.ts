@@ -68,6 +68,10 @@ export interface CapturedPhoto {
   width: number;
   height: number;
   capturedAt: number;
+  /** true = 相机回来的 RAW(ARW) 原文件；这类资产只保存不调色 */
+  raw?: boolean;
+  /** RAW 的缩略图（原生从内嵌预览解出来的 jpg） */
+  thumbUri?: string;
   /** 原图摘要，用于一拍一传的去重（同一张不会入库两次） */
   hash: string;
 }

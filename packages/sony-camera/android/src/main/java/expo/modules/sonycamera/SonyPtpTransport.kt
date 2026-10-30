@@ -479,6 +479,13 @@ internal class SonyPtpTransport private constructor(
   /** 读回当前画质；机身不支持这条属性时返回 null。 */
   fun captureFormat(): Long? = readPropertyValue(PROPERTY_CAPTURE_FORMAT)
 
+  /**
+   * 无条件读走一个对象的字节（RAW+JPEG 时用来取同一张的 RAW）。
+   *
+   * 和 [fetchObject] 的区别：不做 JPEG 判断、也不"消费并丢弃"，调用方自己确认过格式。
+   */
+  fun takeObjectPayload(handle: Int): ByteArray? = readObjectPayloadRaw(handle)
+
   /** One `0x9209` read: the camera's whole property array, or null when it refused. */
   private fun readPropertyBlob(maxReadRetries: Int = MAX_READ_RETRIES): ByteArray? {
     val result = execute(0x9209, expectsData = true, allowBusy = true, maxReadRetries = maxReadRetries)
