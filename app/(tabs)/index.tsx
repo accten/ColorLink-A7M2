@@ -193,7 +193,9 @@ export default function ConnectScreen() {
                     {asset.fileName}
                   </T>
                   <T variant="monoMuted" style={{ marginTop: 3 }} numberOfLines={1}>
-                    {formatClock(asset.capturedAt)} · {formatDimensions(asset.width, asset.height)} ·{' '}
+                    {/* RAW 的宽高来自内嵌预览（1616×1080），标出来会让人以为拍成了 1.7MP */}
+                    {formatClock(asset.capturedAt)} ·{' '}
+                    {asset.raw ? 'ARW' : formatDimensions(asset.width, asset.height)} ·{' '}
                     {formatBytes(asset.bytes)}
                   </T>
                 </View>
