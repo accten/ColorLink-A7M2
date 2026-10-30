@@ -34,7 +34,10 @@ target_compile_definitions(sonyraw PRIVATE
 # -fno-strict-aliasing：dcraw 系代码大量用 union/位运算在 uint16 与 float 之间转换，
 # 开严格别名优化在 -O2 下可能把像素算歪（本机用 -O1 对过 rawpy，这里保守起见关掉）。
 # -fno-finite-math-only：去马赛克里对 inf/nan 有判断，不能被优化掉。
-target_compile_options(sonyraw PRIVATE -O2 -fno-strict-aliasing -fno-finite-math-only -w)
+# -include strings.h：libraw 的元数据代码直接用 strncasecmp / strtok_r，只包含 <string.h>
+# 的 libc（比如 bionic 的部分配置）会在编译期报未声明。
+target_compile_options(sonyraw PRIVATE -O2 -fno-strict-aliasing -fno-finite-math-only -w
+  -include strings.h)
 target_link_libraries(sonyraw PRIVATE jnigraphics log z)
 
 set_target_properties(sonyraw PROPERTIES
