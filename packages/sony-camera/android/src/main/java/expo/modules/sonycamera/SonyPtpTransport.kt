@@ -225,6 +225,8 @@ internal class SonyPtpTransport private constructor(
   private var exposurePollFailures = 0
 
   @Volatile private var exposurePollingDisabled = false
+  /** 最近一次属性轮询失败的原因：用来判断是"相机忙"还是"链路死了" */
+  @Volatile private var lastPollFailureReason: String? = null
 
   /** 已经打过日志的成功属性读数 */
   private val propDescObserved = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
@@ -459,6 +461,13 @@ internal class SonyPtpTransport private constructor(
    */
   fun setCaptureFormat(value: Int): Boolean {
     if (value !in CAPTURE_FORMAT_VALUES) return false
+    // **先看机身有没有声明这条属性**。ILCE-7M2 不声明 D253，但仍然会对写入回 0x2001(OK)，
+    // 真机实测后果是：写完 D253=2(RAW+JPEG) 再进取景，机身在 0x9205(D221) 上直接不回包，
+    // 读超时后整条 USB 链路死掉（只能拔插）。所以不支持就一个字节都不要写。
+    if (!sonyVendorCodes.properties.contains(PROPERTY_CAPTURE_FORMAT)) {
+      trace("D253 capture format not advertised by this body; skipping write")
+      return false
+    }
     return runCatching {
       execute(0x9205, intArrayOf(PROPERTY_CAPTURE_FORMAT), outgoingData = byteArrayOf(value.toByte()))
       trace("D253 capture format = $value")
@@ -608,10 +617,25 @@ internal class SonyPtpTransport private constructor(
     exposurePollFailures += 1
     if (exposurePollFailures >= MAX_EXPOSURE_POLL_FAILURES) {
       exposurePollingDisabled = true
+      lastPollFailureReason = reason
       trace("disabling property polling after $exposurePollFailures failures: $reason")
     } else {
       trace("property poll failed ($exposurePollFailures): $reason")
     }
+  }
+
+  /**
+   * 链路是不是已经死了（写都发不出去 / 读不回来）。
+   *
+   * 上层据此决定要不要自动重连一次：真机上"相机 ACK 了某个不该写的属性"之后，
+   * 往往就是写 -1、读超时，重开一次 USB 设备句柄有机会救回来。
+   */
+  fun linkLooksDead(): Boolean {
+    if (!exposurePollingDisabled) return false
+    val reason = lastPollFailureReason ?: return false
+    return reason.contains("USB write") ||
+      reason.contains("could not be recovered") ||
+      reason.contains("bulk-OUT")
   }
 
   /**

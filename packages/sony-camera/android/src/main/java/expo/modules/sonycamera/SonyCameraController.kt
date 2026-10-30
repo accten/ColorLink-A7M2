@@ -55,6 +55,9 @@ internal class SonyCameraController(private val context: Context) {
     /** 兜底取图后的冷却：别在相机还没清理干净时连取两次同一张 */
     private const val BODY_SHUTTER_FETCH_COOLDOWN_MS = 3_000L
 
+    /** 死链路自动重连的冷却：一次尝试失败后别马上再来一遍 */
+    private const val DEAD_LINK_RECOVERY_COOLDOWN_MS = 15_000L
+
     /**
      * 机身快门一次最多读几个对象。
      *
@@ -633,6 +636,12 @@ internal class SonyCameraController(private val context: Context) {
   fun readExposureBlocking(): Map<String, Any?> {
     val active = transport ?: return emptyMap()
     if (streaming.get()) return lastExposureSnapshot
+    // 属性轮询已经连续失败到停用、而且是"写不出去/读不回来"那种失败：说明链路死了，
+    // 自动重开一次 USB 句柄（真机上照相机 ACK 了不该写的属性之后就是这种状态）。
+    if (active.linkLooksDead()) {
+      recoverDeadLinkOnce()
+      return emptyMap()
+    }
     return try {
       propertyExecutor.submit<Map<String, Any?>> { active.readExposureSnapshot().also { lastExposureSnapshot = it } }
         .get(6, TimeUnit.SECONDS)
@@ -640,6 +649,22 @@ internal class SonyCameraController(private val context: Context) {
       val cause = error.cause ?: error
       trace("read exposure failed: ${cause.message ?: cause::class.java.simpleName}")
       emptyMap()
+    }
+  }
+
+  /** 死链路自动重连：15 秒内最多一次，拍照/取景中不动它 */
+  private var lastDeadLinkRecoveryAt = 0L
+  private fun recoverDeadLinkOnce() {
+    val now = SystemClock.elapsedRealtime()
+    if (now - lastDeadLinkRecoveryAt < DEAD_LINK_RECOVERY_COOLDOWN_MS) return
+    if (state == "capturing") return
+    lastDeadLinkRecoveryAt = now
+    trace("USB link looks dead; reconnecting automatically")
+    executor.submit {
+      runCatching {
+        disconnectBlocking(preserveLiveViewRequest = true)
+        connectBlocking()
+      }.onFailure { trace("automatic reconnect failed: ${it.message ?: it::class.java.simpleName}") }
     }
   }
 
