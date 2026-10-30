@@ -149,7 +149,7 @@ jobs:
             -PreactNativeArchitectures=arm64-v8a \
             -Pandroid.enableMinifyInReleaseBuilds=false \
             -Porg.gradle.parallel=false \
-            -Pkotlin.compiler.execution.strategy=in-process
+            -Pkotlin.compiler.execution.strategy=in-process 2>&1 | tee ../gradle-build.log
 
       - name: Collect APK
         run: |
@@ -201,6 +201,7 @@ jobs:
         with:
           name: colorlink-build-reports
           path: |
+            gradle-build.log
             android/app/build/reports/**
             android/build/reports/**
           if-no-files-found: ignore
