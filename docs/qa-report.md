@@ -552,5 +552,5 @@ list(FILTER ... EXCLUDE REGEX "_ph\.cpp$")，否则链接期一堆 multiple defi
 internal/，所以 vendored 目录是 cpp/libraw/{libraw,internal,src}，不是常见的 include/ 布局。
 
 **实测（本机 cygwin g++，同一份源码）：** 打开 3ms、dcraw_process AHD 全幅约 1.9s、
-搬运 60ms；真机（平板 ARM）预计 3~6 秒，一次性。解码结果缓存在 colorlink/raw/<id>.png，
+搬运 60ms；真机（OPPO Pad 4 Pro，arm64）实测 `raw.decode.ok decodeMs=7984`、总 7999ms，一次性。解码结果缓存在 colorlink/raw/<id>.png（24MP PNG 约 58MB），
 ARW 原件不动；删图时三份派生图一起删。

@@ -108,7 +108,7 @@ export default function EditorScreen() {
 /**
  * RAW(ARW) 解码页：进编辑器之前先把原图解成全幅 PNG。
  *
- * 24MP 的 14bit 拜耳数据 → 去马赛克 / 机身白平衡 / sRGB，平板实测 3~6 秒，
+ * 24MP 的 14bit 拜耳数据 → 去马赛克 / 机身白平衡 / sRGB，平板（OPPO Pad 4 Pro）实测约 8 秒，
  * 所以只在第一次打开这张 RAW 时出现，解完立刻进编辑器；之后再点开就是秒进。
  */
 function RawDecodeScreen({ asset }: { asset: Asset }) {
@@ -187,7 +187,7 @@ function RawDecodeScreen({ asset }: { asset: Asset }) {
             </View>
             <T variant="monoMuted">
               正在用 LibRaw 解 {asset.fileName}：去马赛克 + 机身白平衡 + sRGB，全幅一次解码。
-              24MP 大约 3~6 秒，只做一次，之后这张就是秒开的普通可调色照片。
+              24MP 大约 8 秒，只做一次，之后这张就是秒开的普通可调色照片。
             </T>
           </>
         )}

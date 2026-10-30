@@ -103,7 +103,10 @@ export async function exportEdited(options: ExportOptions): Promise<ExportResult
   await output.write(jpeg);
 
   const outputHash = await sha256OfFile(output);
-  const originalHash = await sha256OfFile(source);
+  // 原件完整性校验要对着"真正的原件"：
+  // JPEG 就是 source；RAW 的 source 是解码出来的 PNG（派生缓存），
+  // 它和 asset.originalHash（ARW 的 sha256）当然不一样，拿它比会误报 export.original.changed。
+  const originalHash = await sha256OfFile(rawSource ? new File(asset.uri) : source);
   const originalIntact = !originalHash || !asset.originalHash || originalHash === asset.originalHash;
 
   let savedToGallery = false;
