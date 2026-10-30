@@ -88,7 +88,7 @@ void outputSize(libraw_data_t* raw, int* width, int* height, int* left, int* top
 extern "C" JNIEXPORT jintArray JNICALL
 Java_expo_modules_sonycamera_RawDecoder_nativeProbe(JNIEnv* env, jobject /*self*/, jstring path) {
   const std::string file = toStdString(env, path);
-  libraw_data_t* raw = libraw_init(nullptr);
+  libraw_data_t* raw = libraw_init(0);
   if (raw == nullptr) {
     throwState(env, "LibRaw 初始化失败");
     return nullptr;
@@ -119,7 +119,7 @@ extern "C" JNIEXPORT jlong JNICALL
 Java_expo_modules_sonycamera_RawDecoder_nativeDecode(JNIEnv* env, jobject /*self*/, jstring path,
                                                      jobject bitmap, jboolean highQuality) {
   const std::string file = toStdString(env, path);
-  libraw_data_t* raw = libraw_init(nullptr);
+  libraw_data_t* raw = libraw_init(0);
   if (raw == nullptr) {
     throwState(env, "LibRaw 初始化失败");
     return -1;

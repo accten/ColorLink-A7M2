@@ -16,8 +16,10 @@ add_library(sonyraw SHARED
   ${LIBRAW_SOURCES}
 )
 
+# LibRaw 源码里既用 "libraw/libraw.h" 又用 "internal/xxx.h"，
+# 所以 include 根目录必须是 vendored 目录本身（它同时包含 libraw/ 和 internal/）。
 target_include_directories(sonyraw PRIVATE
-  ${LIBRAW_ROOT}/include
+  ${LIBRAW_ROOT}
   ${LIBRAW_ROOT}/internal
 )
 
