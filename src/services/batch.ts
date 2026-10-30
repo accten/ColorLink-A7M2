@@ -14,6 +14,8 @@ import { loadLutFromPath } from './lutStore';
  * 单张失败不影响后面的图：失败原因收集起来一次性汇报，而不是第一张出错就整体中断。
  */
 
+export const RAW_NOT_GRADEABLE = 'RAW(ARW) 原文件不支持调色导出，请用同一张的 JPEG';
+
 export interface BatchExportOptions {
   assets: Asset[];
   getSession: (assetId: string) => EditorSession;
@@ -49,6 +51,15 @@ export async function batchExportAssets(options: BatchExportOptions): Promise<Ba
     if (isCancelled?.()) {
       cancelled = true;
       break;
+    }
+
+    // RAW(ARW) 是相机原始文件：Skia 解不了 TIFF，进调色只会得到一条解码报错。
+    // 这里直接给出可读原因，而不是让它伪装成"导出失败：decode returned null"。
+    if (asset.raw) {
+      failed.push({ assetId: asset.id, fileName: asset.fileName, error: RAW_NOT_GRADEABLE });
+      eventLog.warn('batch.export.skipRaw', { fileName: asset.fileName });
+      onProgress?.(index + 1, total, asset.fileName);
+      continue;
     }
 
     const session = getSession(asset.id);
