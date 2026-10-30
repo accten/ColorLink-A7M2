@@ -8,6 +8,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
   ViewStyle,
 } from 'react-native';
@@ -533,15 +534,63 @@ export function ParamRow({
   format?: (v: number) => string;
 }) {
   const dirty = value !== 0;
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  const display = format ? format(value) : value > 0 ? `+${value}` : `${value}`;
+
+  const beginEdit = () => {
+    setDraft(String(value));
+    setEditing(true);
+  };
+
+  /** 手填提交：夹到 [min,max]，并按 step 对齐（step<1 时保留一位小数） */
+  const commitEdit = () => {
+    setEditing(false);
+    // 空输入当作"取消"，不要悄悄变成 0
+    if (!draft.trim()) return;
+    const parsed = Number(draft.replace(',', '.').trim());
+    if (!Number.isFinite(parsed)) return;
+    const clamped = Math.min(max, Math.max(min, parsed));
+    const snapped = step > 0 ? Math.round(clamped / step) * step : clamped;
+    const next = Number(snapped.toFixed(step < 1 ? 1 : 0));
+    if (next === value) return;
+    if (onCommit) onCommit(next);
+    else onChange(next);
+  };
+
   return (
     <View style={styles.paramRow}>
       <View style={styles.paramHead}>
         <Text style={[typography.body, { fontSize: 14 }]}>{label}</Text>
-        <Pressable onPress={onReset} disabled={!onReset} hitSlop={8}>
-          <Text style={[typography.mono, { color: dirty ? color.accent : color.textFaint }]}>
-            {format ? format(value) : value > 0 ? `+${value}` : `${value}`}
-          </Text>
-        </Pressable>
+        {editing ? (
+          <TextInput
+            value={draft}
+            onChangeText={setDraft}
+            onSubmitEditing={commitEdit}
+            onBlur={commitEdit}
+            autoFocus
+            selectTextOnFocus
+            keyboardType="numbers-and-punctuation"
+            returnKeyType="done"
+            style={styles.paramInput}
+            accessibilityLabel={`${label} 数值`}
+          />
+        ) : (
+          <Pressable
+            onPress={beginEdit}
+            onLongPress={onReset}
+            delayLongPress={350}
+            disabled={false}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel={`${label} 数值 ${display}，点击可手动输入，长按归零`}
+          >
+            <Text style={[typography.mono, { color: dirty ? color.accent : color.textFaint }]}>
+              {display}
+            </Text>
+          </Pressable>
+        )}
       </View>
       <Slider value={value} min={min} max={max} step={step} onChange={onChange} onCommit={onCommit} />
     </View>
@@ -734,6 +783,19 @@ export const styles = StyleSheet.create({
   },
   paramRow: { paddingTop: space.md },
   paramHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  // 手填数值的输入框：和右侧数值同宽，避免切换时行内跳动
+  paramInput: {
+    ...typography.mono,
+    color: color.accent,
+    minWidth: 64,
+    textAlign: 'right',
+    paddingVertical: 2,
+    paddingHorizontal: 6,
+    borderRadius: radius.xs,
+    backgroundColor: color.surfaceHi,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.accent,
+  },
   sheet: {
     backgroundColor: color.bgElev,
     borderTopLeftRadius: radius.xl,

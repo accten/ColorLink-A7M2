@@ -78,7 +78,7 @@ export function HslPanel({
           />
         ))}
         <View style={styles.bandFooter}>
-          <T variant="monoMuted">只影响{active?.label ?? ''}色区，按色相角平滑过渡</T>
+          <T variant="monoMuted">只影响{active?.label ?? ''}色区 · 点数值可输入，长按归零</T>
           <Pressable onPress={() => onResetBand(band)} hitSlop={8}>
             <T variant="monoMuted" style={{ color: color.textMuted }}>
               重置本带

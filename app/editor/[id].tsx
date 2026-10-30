@@ -737,7 +737,7 @@ function AdjustPanel({
               />
             ))}
             <T variant="monoMuted" style={{ marginTop: space.sm }}>
-              {PARAM_META[keys[0]].hint}
+              {PARAM_META[keys[0]].hint} · 点右侧数值可直接输入，长按归零
             </T>
             <View style={{ height: space.lg }} />
           </ScrollView>
