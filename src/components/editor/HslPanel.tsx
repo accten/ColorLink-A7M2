@@ -39,6 +39,9 @@ export function HslPanel({
         horizontal
         showsHorizontalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        // 横向 ScrollView 在 flex 列里会被拉满剩余高度：不加这条，色带与下面的滑块之间
+        // 会空出一大截（和编辑器分组标签条同一个坑）。
+        style={styles.bandStripBox}
         contentContainerStyle={styles.bandStrip}
       >
         {HSL_BANDS.map((item) => {
@@ -89,6 +92,7 @@ export function HslPanel({
 
 const styles = StyleSheet.create({
   bandStrip: { gap: 6, paddingRight: space.lg, paddingVertical: 2 },
+  bandStripBox: { flexGrow: 0, flexShrink: 0 },
   band: {
     flexDirection: 'row',
     alignItems: 'center',

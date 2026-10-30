@@ -2,8 +2,8 @@
   "expo": {
     "name": "ColorLink",
     "slug": "a7m2-colorlink",
-    "version": "0.2.5",
-    "orientation": "portrait",
+    "version": "0.2.6",
+    "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "colorlink",
     "userInterfaceStyle": "dark",
@@ -13,7 +13,7 @@
     },
     "android": {
       "package": "app.colorlink.a7m2",
-      "versionCode": 16,
+      "versionCode": 17,
       "adaptiveIcon": {
         "backgroundColor": "#08090A",
         "foregroundImage": "./assets/images/android-icon-foreground.png",

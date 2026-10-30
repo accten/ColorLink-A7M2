@@ -45,6 +45,7 @@ import { color, radius, space, typography } from '@/design/tokens';
 import { useThrottledCallback } from '@/design/useThrottledCallback';
 import { CurveEditor } from '@/components/editor/CurveEditor';
 import { HslPanel } from '@/components/editor/HslPanel';
+import { PANEL_RESIZER_SIZE, PanelResizer } from '@/components/editor/PanelResizer';
 import {
   computeHistogram,
   curveSkImage,
@@ -64,6 +65,13 @@ import { ensurePreview, existingPreview } from '@/services/thumbs';
 import { EditorSession, useAppStore } from '@/state/useAppStore';
 
 type PanelTab = 'adjust' | 'presets' | 'ai';
+
+/** 参数面板默认占长边的比例（竖屏=高度，横屏=宽度） */
+const DEFAULT_PANEL_FRACTION = 0.46;
+/** 面板最小占比：再小滑块就挤没了 */
+const MIN_PANEL_FRACTION = 0.26;
+/** 面板最大占比：再大画面就没地方了 */
+const MAX_PANEL_FRACTION = 0.78;
 
 const AI_SUGGESTIONS = [
   '调成胶片感，偏暖',
@@ -203,16 +211,33 @@ function EditorBody({ asset }: { asset: Asset }) {
   }, [session?.lutPath]);
 
   /* ---------- 预览区域尺寸：按原图比例放进可用空间 ---------- */
-  const panelHeight = Math.min(winH * 0.46, 380);
-  const stageHeight = Math.max(160, winH - insets.top - insets.bottom - panelHeight - 96);
+  // 参数面板可拖动调整大小：存成"占长边的比例"，竖屏是高度占比、横屏是宽度占比，
+  // 旋转屏幕后不用重新拖。0.26 / 0.78 是夹取范围（再小放不下滑块，再大把画面挤没）。
+  const isLandscape = winW > winH;
+  const [panelFraction, setPanelFraction] = useState(DEFAULT_PANEL_FRACTION);
+  const longSide = isLandscape ? winW : winH;
+  const panelSize = Math.min(
+    longSide * MAX_PANEL_FRACTION,
+    Math.max(longSide * MIN_PANEL_FRACTION, longSide * panelFraction),
+  );
+  const stageHeight = Math.max(
+    140,
+    winH - insets.top - insets.bottom - (isLandscape ? PANEL_RESIZER_SIZE : panelSize) - 96,
+  );
+  const stageWidth = isLandscape ? Math.max(160, winW - panelSize - PANEL_RESIZER_SIZE) : winW;
   /** 曲线画布高度跟着面板走：小屏上别把「保存到相册」挤出可视区 */
-  const curveHeight = Math.max(92, Math.min(138, panelHeight - 210));
+  const curveHeight = Math.max(
+    92,
+    Math.min(138, (isLandscape ? Math.min(panelSize * 0.9, winH * 0.5) : panelSize) - 210),
+  );
   const frame = useMemo(() => {
     const imgW = image?.width() ?? asset.width;
     const imgH = image?.height() ?? asset.height;
-    const scale = Math.min(winW / Math.max(imgW, 1), stageHeight / Math.max(imgH, 1));
+    const scale = Math.min(stageWidth / Math.max(imgW, 1), stageHeight / Math.max(imgH, 1));
     return { width: Math.max(1, imgW * scale), height: Math.max(1, imgH * scale) };
-  }, [image, asset.width, asset.height, winW, stageHeight]);
+  }, [image, asset.width, asset.height, stageWidth, stageHeight]);
+
+
 
   const curvesActive = useMemo(() => !isIdentityCurveSet(curves), [curves]);
 
@@ -426,8 +451,9 @@ function EditorBody({ asset }: { asset: Asset }) {
         </Pressable>
       </View>
 
-      {/* 画面 */}
-      <View style={[styles.stage, { height: stageHeight }]}>
+      {/* 画面 + 参数面板：竖屏上下排（分隔条在中间），横屏左右排（分隔条在中间） */}
+      <View style={[styles.body, isLandscape && styles.bodyLandscape]}>
+        <View style={[styles.stage, isLandscape ? { width: stageWidth } : { height: stageHeight }]}>
         {/* 预览图解码前先铺缩略图：点进编辑器的第一帧就不是黑的 */}
         {!image && !imageError ? (
           <Image
@@ -501,8 +527,24 @@ function EditorBody({ asset }: { asset: Asset }) {
         </Pressable>
       </View>
 
-      {/* 底部面板 */}
-      <View style={[styles.panel, { height: panelHeight, paddingBottom: Math.max(insets.bottom, space.sm) }]}>
+        {/* 拖动分隔条：竖屏上下拖，横屏左右拖，改面板大小 */}
+        <PanelResizer
+          vertical={isLandscape}
+          fraction={panelFraction}
+          longSide={longSide}
+          min={MIN_PANEL_FRACTION}
+          max={MAX_PANEL_FRACTION}
+          onChange={setPanelFraction}
+        />
+
+        {/* 参数面板 */}
+        <View
+          style={[
+            styles.panel,
+            isLandscape ? { width: panelSize } : { height: panelSize },
+            { paddingBottom: Math.max(insets.bottom, space.sm) },
+          ]}
+        >
         <Segmented
           value={tab}
           onChange={(v) => setTab(v as PanelTab)}
@@ -593,6 +635,7 @@ function EditorBody({ asset }: { asset: Asset }) {
             icon="download-outline"
           />
         </View>
+      </View>
       </View>
     </View>
   );
@@ -999,6 +1042,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.lg,
     paddingTop: space.md,
   },
+  // 画面 + 面板的容器：竖屏上下、横屏左右
+  body: { flex: 1, flexDirection: 'column' },
+  bodyLandscape: { flexDirection: 'row' },
+
   actionRow: { flexDirection: 'row', gap: space.sm, paddingTop: space.sm },
   presetGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
   presetCard: {
