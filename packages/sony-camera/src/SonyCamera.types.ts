@@ -158,6 +158,29 @@ export type SonyFocusResult = {
 };
 
 /**
+ * RAW(ARW) 解码结果。
+ *
+ * 原生侧用 LibRaw 把 ARW 解成 8bit sRGB 全幅 PNG（机身白平衡 + AHD 去马赛克），
+ * 并顺手缩出两档派生图。JS 侧把这些文件挪进 App 目录后，调色与导出
+ * 就走和 JPEG 完全相同的管线。
+ */
+export type SonyRawDecodeResult = {
+  /** 全幅 PNG 的绝对路径（24MP 大约 30~50MB） */
+  pngPath: string;
+  /** 1600px 编辑预览（JPEG） */
+  previewPath: string;
+  /** 480px 图库缩略图（JPEG） */
+  thumbPath: string;
+  width: number;
+  height: number;
+  bytes: number;
+  /** LibRaw 处理 + 像素搬运耗时 */
+  decodeMs: number;
+  /** 含 PNG / JPEG 编码的总耗时 */
+  totalMs: number;
+};
+
+/**
  * The read-only values a monitor shows next to the live view.
  *
  * Every field is optional: it is filled only when the camera's property array actually

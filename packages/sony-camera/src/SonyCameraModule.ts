@@ -8,6 +8,7 @@ import type {
   SonyExposureSnapshot,
   SonyCameraState,
   SonyPhoto,
+  SonyRawDecodeResult,
 } from './SonyCamera.types';
 
 declare class SonyCameraNativeModule extends NativeModule<SonyCameraModuleEvents> {
@@ -53,6 +54,15 @@ declare class SonyCameraNativeModule extends NativeModule<SonyCameraModuleEvents
   setCaptureFormat?(value: number): Promise<{ supported?: boolean; value?: number }>;
   /** Android only, and only when the active ScalarWebAPI camera advertises coordinate focus. */
   focusAt?(x: number, y: number, viewWidth: number, viewHeight: number): Promise<SonyFocusResult>;
+
+  /**
+   * RAW(ARW) 解码：LibRaw 把原图解成 8bit sRGB 全幅 PNG，并缩出 1600px 预览与 480px 缩略图。
+   *
+   * 不需要相机连接 —— 已经传回本机的 ARW 随时可以解。24MP 大约 3~6 秒，
+   * 调用方应缓存结果，只解一次。
+   */
+  decodeRaw?(rawPath: string, outDir: string, baseName: string): Promise<SonyRawDecodeResult>;
+
   getDiagnostics(): SonyDiagnosticsSnapshot;
   clearDiagnostics(): void;
 }

@@ -60,6 +60,7 @@ import {
 } from '@/services/grading';
 import { exportEdited } from '@/services/exportImage';
 import { importLutFromPicker, loadLutFromPath } from '@/services/lutStore';
+import { ensureRawGrade, existingRawGrade } from '@/services/rawGrade';
 import { requestGrade } from '@/services/aiClient';
 import { ensurePreview, existingPreview } from '@/services/thumbs';
 import { EditorSession, useAppStore } from '@/state/useAppStore';
@@ -94,20 +95,54 @@ export default function EditorScreen() {
     );
   }
 
-  // RAW(ARW)：只保存原文件，不进调色管线（Skia 解不了 TIFF）
-  if (asset.raw) return <RawAssetScreen asset={asset} />;
+  // RAW(ARW)：先用 LibRaw 解成全幅 PNG，再进普通调色管线（解码只做一次）
+  if (asset.raw) {
+    const gradeUri = existingRawGrade(asset);
+    if (!gradeUri) return <RawDecodeScreen asset={asset} />;
+    // 解过之后编辑器读 previewUri / 导出读 gradeUri，走的是和 JPEG 一样的路径
+  }
 
   return <EditorBody asset={asset} />;
 }
 
 /**
- * RAW(ARW) 资产：只保存原文件，不做调色。
+ * RAW(ARW) 解码页：进编辑器之前先把原图解成全幅 PNG。
  *
- * 现在的调色管线是 Skia + JPEG 编码，解不了 TIFF 容器；强行进编辑器只会黑屏。
- * 这里给一个明确的只读页：能看到内嵌预览、知道文件在哪、能返回。
+ * 24MP 的 14bit 拜耳数据 → 去马赛克 / 机身白平衡 / sRGB，平板实测 3~6 秒，
+ * 所以只在第一次打开这张 RAW 时出现，解完立刻进编辑器；之后再点开就是秒进。
  */
-function RawAssetScreen({ asset }: { asset: Asset }) {
+function RawDecodeScreen({ asset }: { asset: Asset }) {
   const insets = useSafeAreaInsets();
+  const attachRawGrade = useAppStore((s) => s.attachRawGrade);
+  const notify = useAppStore((s) => s.notify);
+  const [phase, setPhase] = useState<'idle' | 'working' | 'failed'>('idle');
+  const [error, setError] = useState<string | null>(null);
+  const startedRef = useRef(false);
+
+  const start = useCallback(async () => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    setPhase('working');
+    setError(null);
+    const grade = await ensureRawGrade(asset);
+    if (!grade) {
+      startedRef.current = false;
+      setPhase('failed');
+      setError('解码失败。ARW 原文件还在，可以重试，或者把画质改成 JPEG+RAW 用 JPEG 那张修。');
+      notify('danger', 'RAW 解码失败');
+      return;
+    }
+    attachRawGrade(asset.id, grade);
+    notify('ok', `RAW 已解码 ${grade.width}×${grade.height}，用时 ${(grade.ms / 1000).toFixed(1)} 秒`);
+  }, [asset, attachRawGrade, notify]);
+
+  // 进来就自动开始：用户点的是"编辑这张"，不该再点一次"开始解码"。
+  // 用 setTimeout 而不是直接调用：状态更新放到下一轮，避免 effect 里同步 setState。
+  useEffect(() => {
+    const timer = setTimeout(() => void start(), 0);
+    return () => clearTimeout(timer);
+  }, [start]);
+
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
       <View style={styles.topBar}>
@@ -119,7 +154,7 @@ function RawAssetScreen({ asset }: { asset: Asset }) {
             {asset.fileName}
           </T>
           <T variant="monoMuted" numberOfLines={1} style={{ marginTop: 2 }}>
-            RAW(ARW) · {formatBytes(asset.bytes)}
+            RAW(ARW) · {formatBytes(asset.bytes)} · {asset.width > 1000 ? `${asset.width}×${asset.height}` : '解码中'}
           </T>
         </View>
       </View>
@@ -131,12 +166,31 @@ function RawAssetScreen({ asset }: { asset: Asset }) {
         />
       </View>
       <View style={{ padding: space.lg, gap: space.sm }}>
-        <T variant="body">这是相机回传的 RAW 原文件</T>
-        <T variant="monoMuted">
-          ARW 已完整保存在 App 私有目录里（图库里带 RAW 标记那张），但当前调色引擎只处理 JPEG，
-          所以这张不能调色。需要修图时请把相机画质设成 JPEG 或 JPEG+RAW，JPEG 那张会自动一起回传。
-        </T>
-        <Button title="返回图库" onPress={() => router.back()} variant="secondary" style={{ marginTop: space.sm }} />
+        {phase === 'failed' ? (
+          <>
+            <T variant="body" style={{ color: color.danger }}>
+              这张 RAW 解不出来
+            </T>
+            <T variant="monoMuted">{error}</T>
+            <Button
+              title="重试解码"
+              onPress={() => void start()}
+              variant="secondary"
+              style={{ marginTop: space.sm }}
+            />
+          </>
+        ) : (
+          <>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.sm }}>
+              <ActivityIndicator color={color.accent} />
+              <T variant="body">正在解码 RAW 原图…</T>
+            </View>
+            <T variant="monoMuted">
+              正在用 LibRaw 解 {asset.fileName}：去马赛克 + 机身白平衡 + sRGB，全幅一次解码。
+              24MP 大约 3~6 秒，只做一次，之后这张就是秒开的普通可调色照片。
+            </T>
+          </>
+        )}
       </View>
     </View>
   );

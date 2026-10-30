@@ -1,5 +1,5 @@
 import { NativeModule } from 'expo';
-import type { SonyCameraModuleEvents, SonyConnectOptions, SonyDiagnosticsSnapshot, SonyFocusResult, SonyExposureSnapshot, SonyCameraState, SonyPhoto } from './SonyCamera.types';
+import type { SonyCameraModuleEvents, SonyConnectOptions, SonyDiagnosticsSnapshot, SonyFocusResult, SonyExposureSnapshot, SonyCameraState, SonyPhoto, SonyRawDecodeResult } from './SonyCamera.types';
 declare class SonyCameraNativeModule extends NativeModule<SonyCameraModuleEvents> {
     getState(): SonyCameraState;
     connect(options?: SonyConnectOptions): Promise<SonyCameraState>;
@@ -39,6 +39,12 @@ declare class SonyCameraNativeModule extends NativeModule<SonyCameraModuleEvents
     }>;
     /** Android only, and only when the active ScalarWebAPI camera advertises coordinate focus. */
     focusAt?(x: number, y: number, viewWidth: number, viewHeight: number): Promise<SonyFocusResult>;
+    /**
+     * RAW(ARW) 解码：LibRaw 把原图解成 8bit sRGB 全幅 PNG，并缩出 1600px 预览与 480px 缩略图。
+     *
+     * 不需要相机连接。24MP 大约 3~6 秒，调用方应缓存结果，只解一次。
+     */
+    decodeRaw?(rawPath: string, outDir: string, baseName: string): Promise<SonyRawDecodeResult>;
     getDiagnostics(): SonyDiagnosticsSnapshot;
     clearDiagnostics(): void;
 }

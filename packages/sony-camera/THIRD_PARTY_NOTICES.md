@@ -28,3 +28,16 @@ scripts/build-uvc-aar.sh and scripts/verify-uvc-artifacts.sh.
 android/libs/UVCAndroid-sony-bulk-patched-arm64-certified.aar is the exact binary that
 passed the 2026-07-29 physical test. android/libs/UVCAndroid-sony-bulk-patched.aar is
 the reproducible multi-ABI package artifact produced from the vendored source.
+
+## LibRaw (vendored)
+
+`android/src/main/cpp/libraw` contains the LibRaw 0.21.4 source tree (`src/`, `internal/`,
+`libraw/` headers, plus `COPYRIGHT` / `LICENSE.CDDL` / `LICENSE.LGPL`). It is compiled by
+CMake into `libsonyraw.so` and used only to decode RAW(ARW) files into an 8-bit sRGB bitmap.
+
+LibRaw is dual-licensed under the LGPL-2.1 and the CDDL-1.0; this project uses it under the
+**CDDL-1.0** so the static link inside the APK stays compliant without object-file offer
+obligations. The library sources are unmodified - only build flags
+(`NO_JPEG` / `NO_LCMS` / `NO_JASPER` / `USE_ZLIB`) and a JNI shim
+(`raw_decode_jni.cpp`) that calls the public C API. Upstream sources are kept in-tree, so
+relinking a modified version only requires replacing the `libraw` folder.

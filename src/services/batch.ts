@@ -4,6 +4,7 @@ import { EditorSession } from '@/core/session';
 
 import { exportEdited } from './exportImage';
 import { loadLutFromPath } from './lutStore';
+import { ensureRawGrade } from './rawGrade';
 
 /**
  * 批量导出（图库多选）。
@@ -14,7 +15,7 @@ import { loadLutFromPath } from './lutStore';
  * 单张失败不影响后面的图：失败原因收集起来一次性汇报，而不是第一张出错就整体中断。
  */
 
-export const RAW_NOT_GRADEABLE = 'RAW(ARW) 原文件不支持调色导出，请用同一张的 JPEG';
+export const RAW_DECODE_FAILED = 'RAW 解码失败（文件可能已损坏），这张跳过';
 
 export interface BatchExportOptions {
   assets: Asset[];
@@ -53,13 +54,16 @@ export async function batchExportAssets(options: BatchExportOptions): Promise<Ba
       break;
     }
 
-    // RAW(ARW) 是相机原始文件：Skia 解不了 TIFF，进调色只会得到一条解码报错。
-    // 这里直接给出可读原因，而不是让它伪装成"导出失败：decode returned null"。
+    // RAW(ARW)：Skia 解不了 TIFF，先让原生解成全幅 PNG（有缓存就直接用），再走普通导出。
+    // 解码失败只影响这一张，原因写清楚，别让整批停下来。
     if (asset.raw) {
-      failed.push({ assetId: asset.id, fileName: asset.fileName, error: RAW_NOT_GRADEABLE });
-      eventLog.warn('batch.export.skipRaw', { fileName: asset.fileName });
-      onProgress?.(index + 1, total, asset.fileName);
-      continue;
+      const grade = await ensureRawGrade(asset);
+      if (!grade) {
+        failed.push({ assetId: asset.id, fileName: asset.fileName, error: RAW_DECODE_FAILED });
+        eventLog.warn('batch.export.rawFailed', { fileName: asset.fileName });
+        onProgress?.(index + 1, total, asset.fileName);
+        continue;
+      }
     }
 
     const session = getSession(asset.id);

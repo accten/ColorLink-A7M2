@@ -528,6 +528,29 @@ JPEG 6.96MB 读出 + 落盘 0.3 秒，ARW 24.9MB 读出 + 落盘约 1.3 秒，�
 补一条 v0.3.1 的边角：机身画质设成**只出 RAW** 时，机身快门这条路本来就要读走那个非 JPEG
 对象（不读句柄不前进），现在读走的字节留下来了，所以也能在图库里落一份 ARW。
 App 里的快门（`awaitCapturedJpeg`）仍然只认 JPEG，RAW-only 时会报"快门按了但没图回来"。
+### 9.16 RAW 也能修图：LibRaw 随仓库自带 + 本机像素级对标（v0.4.0）
 
+用户要求「RAW 也能修图，RAW 更好修」。上一版 RAW 只能存不能修，因为 JS 侧的 Skia 解不了
+TIFF 容器；这次把 **LibRaw 0.21.4 源码** (packages/sony-camera/android/src/main/cpp/libraw)
+放进仓库，用 NDK/CMake 编出 libsonyraw.so，JNI 直接把 24MP 解成 ARGB_8888 写进 Bitmap，
+Java 侧再存 PNG + 1600px 预览 + 480px 缩略图，之后这张 RAW 和普通 JPEG 走同一条调色/导出管线。
 
+**踩到的两个坑（都在本机用 rawpy 逐像素对出来的，没上真机才发现的话要白等两轮 CI）：**
 
+1. params.gamm[0] 是**幂的倒数**。照 dcraw 的直觉写 2.222（sRGB 的编码幂），
+   解出来是一片死黑：均值 14.4,15.8,17.4，而 rawpy 同一张是 98.2,97.4,67.5。
+   正确写法是 1/2.222 = 0.45，改完两边**逐像素一致**（6000×4000 里 99.99% 完全相同，
+   剩下的是 libraw 内部浮点舍入，最大差 25/255）。
+2. LibRaw 处理出来是**有效像素**尺寸 6024×4024，机身自己的 JPEG 是 6000×4000；
+   sizes.raw_inset_crops[0] 给的就是 6000×4000（cleft/ctop 是 65535 的哨兵值，不能用），
+   所以按居中裁 12px 再写 Bitmap，尺寸才和 JPEG 对齐。
+
+**构建侧的坑：** src/*_ph.cpp 是 LibRaw 给"不编后处理"的精简版准备的占位实现，
+和真实现（mem_image.cpp / ile_write.cpp / aw2image.cpp）符号重名；全量编译必须
+list(FILTER ... EXCLUDE REGEX "_ph\.cpp$")，否则链接期一堆 multiple definition。
+另外 libraw.h 里的 #include "internal/..." 要求 include 根目录同时能看到 libraw/ 和
+internal/，所以 vendored 目录是 cpp/libraw/{libraw,internal,src}，不是常见的 include/ 布局。
+
+**实测（本机 cygwin g++，同一份源码）：** 打开 3ms、dcraw_process AHD 全幅约 1.9s、
+搬运 60ms；真机（平板 ARM）预计 3~6 秒，一次性。解码结果缓存在 colorlink/raw/<id>.png，
+ARW 原件不动；删图时三份派生图一起删。

@@ -11,6 +11,18 @@ android {
   defaultConfig {
     versionCode 201
     versionName "0.2.1"
+    // LibRaw 用 NDK 现编（源码随仓库），只打 arm64：24MP RAW 修图本来就在近年平板上。
+    // 不加这一行会为 4 个 ABI 各编一遍 76 个 C++ 文件，CI 上的 2 核机器会超时。
+    ndk {
+      abiFilters 'arm64-v8a'
+    }
+  }
+  ndkVersion "27.1.12297006"
+  externalNativeBuild {
+    cmake {
+      path "src/main/cpp/CMakeLists.txt"
+      version "3.22.1"
+    }
   }
   lintOptions {
     abortOnError false

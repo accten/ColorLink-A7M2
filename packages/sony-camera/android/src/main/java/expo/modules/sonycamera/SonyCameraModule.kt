@@ -68,6 +68,12 @@ class SonyCameraModule : Module(), SonyCameraController.Listener {
       controller.focusAtBlocking(x, y, viewWidth, viewHeight)
     }
 
+    // RAW(ARW) 解码：LibRaw 把原图解成 PNG（全幅）+ 预览/缩略图，之后照常调色导出。
+    // 单独一个函数，不依赖相机连接状态 —— 断线时也能修已经传回来的 RAW。
+    AsyncFunction("decodeRaw") { rawPath: String, outDir: String, baseName: String ->
+      RawDecoder.decode(rawPath, outDir, baseName)
+    }
+
     View(SonyCameraView::class) {
       Prop("active") { view: SonyCameraView, active: Boolean -> view.setActive(active) }
       OnViewDestroys { view: SonyCameraView -> view.cleanup() }

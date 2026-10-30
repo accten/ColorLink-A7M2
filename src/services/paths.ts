@@ -6,6 +6,7 @@ import { Directory, File, Paths } from 'expo-file-system';
  *   <document>/colorlink/
  *   ├── ingest/     原图（只读，永不修改）
  *   ├── edited/     调色输出
+ *   ├── raw/        RAW(ARW) 解出来的全幅 PNG（可重建的缓存）
  *   ├── thumbs/     480px 列表缩略图
  *   ├── previews/   1600px 编辑预览图（编辑器秒开用）
  *   ├── luts/       导入的 .cube
@@ -18,6 +19,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 export const rootDir = new Directory(Paths.document, 'colorlink');
 export const ingestDir = new Directory(rootDir, 'ingest');
 export const editedDir = new Directory(rootDir, 'edited');
+export const rawDir = new Directory(rootDir, 'raw');
 export const thumbsDir = new Directory(rootDir, 'thumbs');
 export const previewsDir = new Directory(rootDir, 'previews');
 export const lutsDir = new Directory(rootDir, 'luts');
@@ -29,7 +31,7 @@ export const settingsFile = new File(rootDir, 'settings.json');
 export const presetsFile = new File(rootDir, 'presets.json');
 export const sessionsFile = new File(rootDir, 'sessions.json');
 
-const ALL_DIRS = [rootDir, ingestDir, editedDir, thumbsDir, previewsDir, lutsDir, presetsDir, logsDir];
+const ALL_DIRS = [rootDir, ingestDir, editedDir, rawDir, thumbsDir, previewsDir, lutsDir, presetsDir, logsDir];
 
 let prepared = false;
 
@@ -52,6 +54,12 @@ export function ingestFile(name: string): File {
 export function thumbFile(name: string): File {
   ensureDirs();
   return new File(thumbsDir, name);
+}
+
+/** RAW 解出来的全幅 PNG；文件丢了可以重新解码，所以它是缓存而不是原件。 */
+export function rawGradeFile(name: string): File {
+  ensureDirs();
+  return new File(rawDir, name);
 }
 
 export function previewFile(name: string): File {

@@ -10,6 +10,7 @@ import { eventLog } from '@/core/log';
 import { decodeImage, fitWithin, renderGradedJpeg } from './grading';
 import { sha256OfFile } from './ingest';
 import { editedFile } from './paths';
+import { gradeSourceUri } from './rawGrade';
 
 export interface ExportResult {
   uri: string;
@@ -57,8 +58,15 @@ export async function exportEdited(options: ExportOptions): Promise<ExportResult
   const longEdge = options.longEdge ?? 4000;
   const quality = options.quality ?? 92;
 
-  const source = new File(asset.uri);
-  if (!source.exists) throw new Error('原图不存在，可能已被删除');
+  // RAW：读解码出来的全幅 PNG；其余读原图。
+  // 注意"原样复制字节"那条捷径对 RAW 不成立：ARW 不是 JPEG，复制出去没人能看，
+  // 所以 RAW 一律走重编码（参数中性时也只是把 PNG 编成 JPEG，图的像素仍是解码结果）。
+  const rawSource = asset.raw === true;
+  const sourceUri = rawSource ? gradeSourceUri(asset) : asset.uri;
+  const source = new File(sourceUri);
+  if (!source.exists) {
+    throw new Error(rawSource ? '这张 RAW 还没解码，先在编辑器里打开一次' : '原图不存在，可能已被删除');
+  }
 
   const bytes = await source.bytes();
   const image = decodeImage(bytes);
@@ -74,17 +82,18 @@ export async function exportEdited(options: ExportOptions): Promise<ExportResult
   const started = Date.now();
   const curvesActive = options.curves ? !isIdentityCurveSet(options.curves) : false;
   const untouched = isNeutral(params) && !options.lut && !curvesActive;
-  const jpeg = untouched
-    ? bytes
-    : renderGradedJpeg({
-        image,
-        params,
-        lut: options.lut ?? null,
-        curves: options.curves ?? null,
-        width: target.width,
-        height: target.height,
-        quality,
-      });
+  const jpeg =
+    untouched && !rawSource
+      ? bytes
+      : renderGradedJpeg({
+          image,
+          params,
+          lut: options.lut ?? null,
+          curves: options.curves ?? null,
+          width: target.width,
+          height: target.height,
+          quality,
+        });
 
   const fileName = uniqueFileName(exportFileName(asset.fileName, new Date()), (candidate) =>
     editedFile(candidate).exists,

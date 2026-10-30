@@ -22,8 +22,13 @@ export interface Asset {
   status: AssetStatus;
   source: AssetSource;
   cameraFileName?: string;
-  /** true = 相机回的 RAW(ARW) 原文件：只保存/导出原文件，不做调色 */
+  /** true = 相机回的 RAW(ARW) 原文件：原文件保留，调色读 `gradeUri` */
   raw?: boolean;
+  /**
+   * RAW 解出来的全幅 PNG（LibRaw → 8bit sRGB）。调色与导出都读它。
+   * 只有 RAW 资产会有；它是可重建的缓存，文件丢了会重新解码。
+   */
+  gradeUri?: string;
 }
 
 const pad = (v: number, len = 2) => String(v).padStart(len, '0');

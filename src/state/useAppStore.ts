@@ -123,6 +123,11 @@ interface AppState {
   markStatus: (assetId: string, status: Asset['status']) => void;
   /** 批量改状态（批量导出后一次性落盘，避免 N 次写索引） */
   markStatuses: (ids: string[], status: Asset['status']) => void;
+  /** RAW 解码完成后挂上全幅 PNG / 预览 / 缩略图与真实尺寸 */
+  attachRawGrade: (
+    assetId: string,
+    grade: { gradeUri: string; previewUri?: string; thumbUri?: string; width?: number; height?: number },
+  ) => void;
   notify: (tone: NoticeTone, text: string, action?: Notice['action']) => void;
   dismissNotice: () => void;
   dismissCapturePreview: () => void;
@@ -599,6 +604,25 @@ export const useAppStore = create<AppState>((set, get) => {
       const wanted = new Set(ids);
       const state = get();
       const next = state.assets.map((a) => (wanted.has(a.id) ? { ...a, status } : a));
+      set({ assets: next });
+      persist(next);
+    },
+
+    attachRawGrade: (assetId, grade) => {
+      const state = get();
+      if (!state.assets.some((a) => a.id === assetId)) return;
+      const next = state.assets.map((asset) =>
+        asset.id === assetId
+          ? {
+              ...asset,
+              gradeUri: grade.gradeUri,
+              previewUri: grade.previewUri ?? asset.previewUri,
+              thumbUri: grade.thumbUri ?? asset.thumbUri,
+              width: grade.width && grade.width > 0 ? grade.width : asset.width,
+              height: grade.height && grade.height > 0 ? grade.height : asset.height,
+            }
+          : asset,
+      );
       set({ assets: next });
       persist(next);
     },
