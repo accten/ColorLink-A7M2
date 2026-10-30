@@ -31,7 +31,10 @@ target_compile_definitions(sonyraw PRIVATE
   _FILE_OFFSET_BITS=64
 )
 
-target_compile_options(sonyraw PRIVATE -O2 -fno-finite-math-only -w)
+# -fno-strict-aliasing：dcraw 系代码大量用 union/位运算在 uint16 与 float 之间转换，
+# 开严格别名优化在 -O2 下可能把像素算歪（本机用 -O1 对过 rawpy，这里保守起见关掉）。
+# -fno-finite-math-only：去马赛克里对 inf/nan 有判断，不能被优化掉。
+target_compile_options(sonyraw PRIVATE -O2 -fno-strict-aliasing -fno-finite-math-only -w)
 target_link_libraries(sonyraw PRIVATE jnigraphics log z)
 
 set_target_properties(sonyraw PROPERTIES
