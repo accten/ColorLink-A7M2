@@ -123,10 +123,10 @@ function RawAssetScreen({ asset }: { asset: Asset }) {
           </T>
         </View>
       </View>
-      <View style={styles.stage}>
+      <View style={styles.stageRaw}>
         <Image
           source={{ uri: asset.thumbUri ?? asset.uri }}
-          style={{ width: '100%', height: '100%' }}
+          style={StyleSheet.absoluteFill}
           contentFit="contain"
         />
       </View>
@@ -1058,6 +1058,8 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
   },
   stage: { alignItems: 'center', justifyContent: 'center', backgroundColor: '#000' },
+  // RAW 只读页：画面占满剩余空间，说明文字固定在下半部分
+  stageRaw: { flex: 1, backgroundColor: '#000' },
   stageOverlay: {
     position: 'absolute',
     top: 0,

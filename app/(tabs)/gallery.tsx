@@ -278,11 +278,12 @@ export default function GalleryScreen() {
                         {summary}
                       </T>
                     ) : (
+                      // RAW 的宽高来自内嵌预览（1616×1080），标兆像素会误导，只标格式
                       <T variant="mono" style={styles.cellMono} numberOfLines={1}>
-                        {formatMegapixels(asset.width, asset.height)}
+                        {asset.raw ? 'ARW' : formatMegapixels(asset.width, asset.height)}
                       </T>
                     )}
-                    {asset.raw ? (
+                    {asset.raw && edited && summary ? (
                       <T variant="mono" style={[styles.cellMono, styles.cellRaw]} numberOfLines={1}>
                         ARW
                       </T>
