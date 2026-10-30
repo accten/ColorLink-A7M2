@@ -80,6 +80,8 @@ jobs:
 
       # RN 0.8x 的原生模块（reanimated/worklets/skia）需要 NDK + CMake。
       # 预装几个常见版本；如果 RN 模板要求别的版本，AGP 会按 ndkVersion 自行补装。
+      # 注意：expo-sony-camera 现在真的要用 NDK 现编 LibRaw（RAW 解码），
+      # 所以下面 Free disk space 里不能再删 $ANDROID_HOME/ndk/*。
       - name: Install NDK and CMake
         run: |
           for v in "27.1.12297006" "28.0.13004108"; do
@@ -94,7 +96,7 @@ jobs:
       - name: Free disk space
         run: |
           df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk/ndk/* /opt/ghc \
+          sudo rm -rf /usr/share/dotnet /opt/ghc \
                       /usr/local/share/boost /usr/share/swift /opt/hostedtoolcache/CodeQL 2>/dev/null || true
           sudo docker image prune -af 2>/dev/null || true
           sudo apt-get clean 2>/dev/null || true

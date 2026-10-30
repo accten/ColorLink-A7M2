@@ -24,7 +24,7 @@ std::string toStdString(JNIEnv* env, jstring value) {
   const char* chars = env->GetStringUTFChars(value, nullptr);
   if (chars == nullptr) return {};
   std::string out(chars);
-  env->ReleaseStringUTFChars(value, chars, chars);
+  env->ReleaseStringUTFChars(value, chars);
   return out;
 }
 
@@ -197,7 +197,7 @@ Java_expo_modules_sonycamera_RawDecoder_nativeDecode(JNIEnv* env, jobject /*self
     for (int x = 0; x < targetWidth; ++x) {
       const uint8_t* px = sample + static_cast<size_t>(x) * components;
       uint8_t* out = row + static_cast<size_t>(x) * 4;
-      if (components == 3) {
+      if (components >= 3) {
         out[0] = px[0];
         out[1] = px[1];
         out[2] = px[2];
