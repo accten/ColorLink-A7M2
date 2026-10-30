@@ -48,8 +48,13 @@ function plainPath(uri: string): string {
   return uri.startsWith('file://') ? decodeURIComponent(uri.slice('file://'.length)) : uri;
 }
 
+/** 原生返回的是文件系统路径，expo-file-system 的 File 统一按 file:// uri 处理 */
+function fileUri(path: string): string {
+  return path.startsWith('file://') ? path : `file://${path}`;
+}
+
 function moveInto(sourcePath: string, target: File): string {
-  const source = new File(sourcePath);
+  const source = new File(fileUri(sourcePath));
   if (!source.exists) return target.uri;
   if (target.exists) target.delete();
   source.move(target);
